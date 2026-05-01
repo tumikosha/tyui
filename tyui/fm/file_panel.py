@@ -577,7 +577,15 @@ class FilePanel(WindowContent):
         name = entry.name
         if len(name) > name_col - 1:
             name = name[: name_col - 2] + "…"
-        name_field = (" " + name).ljust(name_col)
+        # ls -F style prefix: '/' for directories (and the '..' parent
+        # row), '*' for executable regular files, space otherwise.
+        if entry.is_dir or entry.is_parent:
+            prefix = "/"
+        elif entry.is_executable:
+            prefix = "*"
+        else:
+            prefix = " "
+        name_field = (prefix + name).ljust(name_col)
 
         if entry.is_parent:
             size_field = "<UP>".rjust(self._SIZE_COL)
@@ -594,7 +602,7 @@ class FilePanel(WindowContent):
         style = self._row_style(
             is_cursor=is_cursor,
             is_selected=is_selected,
-            focused=self.has_focus,
+            focused=self._is_active_panel,
         )
         # Quick-search highlight: split the row into 3 segments around the
         # matched substring inside the displayed name (which lives at offset
@@ -668,6 +676,38 @@ class FilePanel(WindowContent):
     # Focus handling — repaint on focus/blur so the cursor-row style
     # follows whether this panel is the active one.
     # ------------------------------------------------------------------
+
+    @property
+    def _is_active_panel(self) -> bool:
+        """True when this panel is the "active" one for rendering purposes.
+
+        A panel is active when it has Textual widget focus OR when it is
+        the content of the Desktop's focused_window (i.e. it is the
+        logical active panel even when Textual widget focus is elsewhere,
+        such as on the CommandLine input).
+        """
+        if self.has_focus:
+            return True
+        # Walk up to the enclosing Window, then to the Desktop.
+        try:
+            from tyui.windowing.desktop import Desktop
+            from tyui.windowing.window import Window
+            node = self.parent
+            while node is not None and not isinstance(node, Window):
+                node = getattr(node, "parent", None)
+            if node is None:
+                return False
+            win = node
+            # Find the desktop.
+            node = win.parent
+            while node is not None and not isinstance(node, Desktop):
+                node = getattr(node, "parent", None)
+            if node is None:
+                return False
+            desktop = node
+            return desktop.focused_window is win
+        except Exception:
+            return False
 
     def on_focus(self, _event=None) -> None:
         self.refresh()
@@ -759,4 +799,6 @@ class FilePanel(WindowContent):
             WindowCommand(id="panel.move",   label="Move",   handler=_bind("move"),   hotkey="f6"),
             WindowCommand(id="panel.mkdir",  label="Mkdir",  handler=_bind("mkdir"),  hotkey="f7"),
             WindowCommand(id="panel.delete", label="Delete", handler=_bind("delete"), hotkey="f8"),
+            WindowCommand(id="panel.chmod",  label="Chmod",  handler=_bind("chmod"), hotkey="ctrl+a"),
+            WindowCommand(id="panel.find_file", label="Find file…", handler=_bind("find_file"), hotkey="alt+f7"),
         ]

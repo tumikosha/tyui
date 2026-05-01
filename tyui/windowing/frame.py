@@ -98,6 +98,7 @@ class BorderSides:
 class Decorations:
     close_box: bool = False
     zoom_box: bool = False
+    minimize_box: bool = False
     resize_grip: bool = False
     number: int | None = None
     subtitle: str | None = None
@@ -162,7 +163,12 @@ def render_top(
         prefix_parts.append(f"─ {decorations.number} ─")
     prefix = "".join(prefix_parts)
 
-    suffix = "[↕]" if decorations.zoom_box else ""
+    suffix_parts: list[str] = []
+    if decorations.minimize_box:
+        suffix_parts.append("[_]")
+    if decorations.zoom_box:
+        suffix_parts.append("[↕]")
+    suffix = "".join(suffix_parts)
 
     # Title + padding.
     title_text = ""

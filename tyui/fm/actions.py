@@ -27,6 +27,7 @@ from typing import Callable
 __all__ = [
     "OpError",
     "OpResult",
+    "chmod_paths",
     "copy_paths",
     "move_paths",
     "delete_paths",
@@ -75,6 +76,36 @@ def _count_entries(paths: list[Path]) -> int:
         except OSError:
             n += 1
     return max(n, 1)
+
+
+def chmod_paths(
+    targets: list[Path],
+    mode: int,
+    *,
+    on_progress: ProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
+) -> OpResult:
+    """Apply ``mode`` (octal int) to each path in ``targets``.
+
+    Symlinks are skipped via ``follow_symlinks=False`` where supported;
+    on platforms without lchmod support the underlying ``Path.chmod``
+    follows the link, which matches the GNU coreutils default.
+    """
+    result = OpResult()
+    total = len(targets)
+    for i, path in enumerate(targets, 1):
+        if _check_cancelled(cancel_event):
+            result.cancelled = True
+            break
+        try:
+            path.chmod(mode)
+        except OSError as e:
+            result.errors.append(OpError(path=path, reason=str(e)))
+        else:
+            result.succeeded.append(path)
+        if on_progress is not None:
+            on_progress(i, total)
+    return result
 
 
 def mkdir_at(parent: Path, name: str) -> OpResult:

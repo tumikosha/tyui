@@ -50,5 +50,26 @@ def main() -> None:
     TyuiApp(launch_mode=launch_mode, initial_path=initial_path).run()
 
 
+def _resolve_we_paths(argv: list[str]) -> list[str]:
+    """Return the list of positional file paths for the `we` command."""
+    parser = argparse.ArgumentParser(
+        prog="we",
+        description="we — open one editor window per file, cascaded.",
+    )
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        default=[],
+        help="Files to edit. Each opens in its own cascaded editor window. "
+             "Missing files open empty; directories are skipped.",
+    )
+    return parser.parse_args(argv).paths
+
+
+def main_we() -> None:
+    paths = _resolve_we_paths(sys.argv[1:])
+    TyuiApp(launch_mode="we", initial_paths=paths).run()
+
+
 if __name__ == "__main__":
     main()

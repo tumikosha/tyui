@@ -18,11 +18,15 @@ import re as _re
 
 from tyui.windowing.core.buffer import TextBuffer
 from tyui.windowing.core.fold_engine import FoldEngine, FoldRegion, effective_placeholder
+from tyui.windowing.core.highlight import Span, SyntaxHighlighter
 from tyui.windowing.core.macro import MacroAction, MacroRecorder
 from tyui.windowing.core.search import SearchOptions, Match, find_matches
 from tyui.windowing.palette import Palette, Style
 
 log = logging.getLogger(__name__)
+
+_SYNTAX_SIZE_THRESHOLD = 1024 * 1024  # 1 MiB — above this, highlighting is off
+_SYNTAX_DEBOUNCE = 0.25               # seconds to wait after edits before retokenizing
 
 
 class EditorWidget(ScrollView):
@@ -105,6 +109,10 @@ class EditorWidget(ScrollView):
         self._search_options: SearchOptions | None = None
         self._rendered_lines: list[str] = []
         self._line_map: list[int] = []
+        self._highlighter = SyntaxHighlighter()
+        self._syntax_spans: list[list[Span]] = []
+        self._highlight_enabled = True
+        self._syntax_timer = None
         self._dragging = False
         self.macro_recorder: MacroRecorder | None = None
         self.macro_skip_keys: set[str] = set()
@@ -135,7 +143,91 @@ class EditorWidget(ScrollView):
 
     def on_mount(self) -> None:
         self._rescan_folds()
+        self._detect_language()
+        self._recompute_syntax()
         self._refresh_render()
+
+    def on_unmount(self) -> None:
+        if self._syntax_timer is not None:
+            try:
+                self._syntax_timer.stop()
+            except Exception:
+                log.debug("syntax timer stop on unmount failed", exc_info=True)
+
+    def _detect_language(self) -> None:
+        sample = "\n".join(self.buffer.lines[:50])
+        self._highlighter.detect(self.buffer.file_path, sample)
+
+    def _should_highlight(self) -> bool:
+        if not self._highlight_enabled or not self._highlighter.enabled:
+            return False
+        size = sum(len(line) + 1 for line in self.buffer.lines)
+        return size <= _SYNTAX_SIZE_THRESHOLD
+
+    def _recompute_syntax(self) -> None:
+        """Retokenize the buffer. Runs in a worker when an app is active;
+        falls back to inline computation otherwise (e.g. in unit tests)."""
+        if not self._should_highlight():
+            if self._syntax_spans:
+                self._syntax_spans = []
+                self._safe_refresh()
+            return
+        from textual._context import NoActiveAppError
+        lines = list(self.buffer.lines)
+        try:
+            self.run_worker(
+                lambda: self._tokenize_worker(lines),
+                thread=True, exclusive=True, group="syntax", exit_on_error=False,
+            )
+        except (NoActiveAppError, RuntimeError):
+            # No active app (e.g. unit tests) — compute synchronously.
+            self._apply_syntax_spans(self._highlighter.tokenize(lines))
+
+    def _tokenize_worker(self, lines: list[str]) -> None:
+        from textual.worker import get_current_worker
+        spans = self._highlighter.tokenize(lines)
+        worker = get_current_worker()
+        if worker.is_cancelled:
+            return
+        try:
+            self.app.call_from_thread(self._apply_syntax_spans, spans)
+        except Exception:
+            log.debug("apply syntax spans failed (app teardown?)", exc_info=True)
+
+    def _apply_syntax_spans(self, spans: list[list[Span]]) -> None:
+        self._syntax_spans = spans
+        self._safe_refresh()
+
+    def _safe_refresh(self) -> None:
+        try:
+            self.refresh()
+        except Exception:
+            log.debug("refresh after syntax recompute failed", exc_info=True)
+
+    def _schedule_syntax(self) -> None:
+        if self._syntax_timer is not None:
+            try:
+                self._syntax_timer.stop()
+            except Exception:
+                log.debug("syntax timer stop failed", exc_info=True)
+        try:
+            self._syntax_timer = self.set_timer(_SYNTAX_DEBOUNCE, self._recompute_syntax)
+        except Exception:
+            # No active app — recompute immediately.
+            self._recompute_syntax()
+
+    def set_language(self, name: str | None) -> None:
+        self._highlighter.set_language(name)
+        self._recompute_syntax()
+        self._safe_refresh()
+
+    def set_highlight_enabled(self, enabled: bool) -> None:
+        self._highlight_enabled = enabled
+        if enabled:
+            self._recompute_syntax()
+        else:
+            self._syntax_spans = []
+        self._safe_refresh()
 
     def _gutter_width(self) -> int:
         if not self.show_line_numbers:
@@ -192,15 +284,38 @@ class EditorWidget(ScrollView):
         line = self._rendered_lines[rendered_idx]
         buf_row = self._rendered_row_to_buffer_row(rendered_idx)
         gutter = self._gutter_width()
+        base = self.rich_style
+        n = len(line)
 
-        text = Text(style=self.rich_style)
-        if self.show_line_numbers:
-            line_num = str(buf_row + 1).rjust(gutter - 1)
-            text.append(f"{line_num} ", style=self._rich_style("editor.line_numbers"))
+        # Per-column style array; index n is a slot for a cursor/marker past EOL.
+        col_styles: list[RichStyle] = [base] * (n + 1)
 
-        # Selection highlighting
+        # Layer 0: syntax base.
+        syntax_style_cache: dict[str, RichStyle] = {}
+        for s, e, role in self._syntax_spans_rendered(buf_row):
+            style = syntax_style_cache.get(role)
+            if style is None:
+                style = self._rich_style(role)
+                syntax_style_cache[role] = style
+            for i in range(max(0, s), min(e, n)):
+                col_styles[i] = style
+
+        # Layer 1: fold placeholders.
+        fold_style = self._rich_style("editor.fold_marker")
+        for s, e in self._get_fold_placeholders_on_row(buf_row):
+            for i in range(max(0, s), min(e, n)):
+                col_styles[i] = fold_style
+
+        # Layer 2: search matches.
+        for s, e, sstyle in self._get_search_spans_on_row(buf_row):
+            for i in range(max(0, s), min(e, n)):
+                col_styles[i] = sstyle
+
+        # Layer 3: selection.
         sel = self.buffer.selection_range()
         has_sel_on_line = False
+        sel_start_vis = sel_end_vis = 0
+        er = -1
         if sel:
             (sr, sc), (er, ec) = sel
             if sr <= buf_row <= er:
@@ -210,57 +325,51 @@ class EditorWidget(ScrollView):
                     sel_end_vis = self._buffer_col_to_rendered_col(buf_row, ec)
                 else:
                     sel_start_vis = self._buffer_col_to_rendered_col(buf_row, sc) if buf_row == sr else 0
-                    sel_end_vis = self._buffer_col_to_rendered_col(buf_row, ec) if buf_row == er else len(line)
-
+                    sel_end_vis = self._buffer_col_to_rendered_col(buf_row, ec) if buf_row == er else n
         if has_sel_on_line:
-            vis_col = self._buffer_col_to_rendered_col(buf_row, self.buffer.cursor_col) if buf_row == self.buffer.cursor_row else -1
-            before_sel = line[:sel_start_vis]
-            selected = line[sel_start_vis:sel_end_vis]
-            after_sel = line[sel_end_vis:]
-            text.append(before_sel)
-            if sel_start_vis <= vis_col < sel_end_vis:
-                sel_before_cur = selected[:vis_col - sel_start_vis]
-                cur_char = selected[vis_col - sel_start_vis] if (vis_col - sel_start_vis) < len(selected) else " "
-                sel_after_cur = selected[vis_col - sel_start_vis + 1:]
-                text.append(sel_before_cur, style=self._rich_style("editor.selection"))
-                text.append(cur_char, style=self._rich_style("editor.selection_cursor"))
-                text.append(sel_after_cur, style=self._rich_style("editor.selection"))
-            else:
-                text.append(selected, style=self._rich_style("editor.selection"))
-            text.append(after_sel)
-            # If the selection continues past end of this line (i.e., newline
-            # itself is selected), draw a marker space so empty/fully-selected
-            # lines are visibly highlighted.
-            if buf_row < er:
-                cursor_at_eol = buf_row == self.buffer.cursor_row and vis_col >= len(line)
-                marker_style = "editor.selection_cursor" if cursor_at_eol else "editor.selection"
-                text.append(" ", style=self._rich_style(marker_style))
-        elif buf_row == self.buffer.cursor_row:
+            sel_style = self._rich_style("editor.selection")
+            for i in range(max(0, sel_start_vis), min(sel_end_vis, n)):
+                col_styles[i] = sel_style
+
+        # Layer 4: cursor (only within the line; EOL handled by the marker below).
+        vis_col = -1
+        if buf_row == self.buffer.cursor_row:
             vis_col = self._buffer_col_to_rendered_col(buf_row, self.buffer.cursor_col)
-            search_spans = self._get_search_spans_on_row(buf_row)
-            fold_spans = [(s, e, self._rich_style("editor.fold_marker")) for s, e in self._get_fold_placeholders_on_row(buf_row)]
-            all_spans = sorted(search_spans + fold_spans, key=lambda s: s[0])
-            if not all_spans:
-                before_cursor = line[:vis_col]
-                cursor_char = line[vis_col] if vis_col < len(line) else " "
-                after_cursor = line[vis_col + 1:] if vis_col < len(line) else ""
-                text.append(before_cursor)
-                text.append(cursor_char, style=self._rich_style("editor.cursor"))
-                text.append(after_cursor)
-            else:
-                for i, ch in enumerate(line):
-                    style: RichStyle | str = RichStyle()
-                    for start, end, s in all_spans:
-                        if start <= i < end:
-                            style = s
-                            break
-                    if i == vis_col:
-                        style = RichStyle(reverse=True) + style if isinstance(style, RichStyle) else RichStyle(reverse=True)
-                    text.append(ch, style=style)
-                if vis_col >= len(line):
-                    text.append(" ", style=self._rich_style("editor.cursor"))
-        else:
-            self._append_with_search_and_fold(text, line, buf_row)
+            in_sel = has_sel_on_line and sel_start_vis <= vis_col < sel_end_vis
+            cur_role = "editor.selection_cursor" if in_sel else "editor.cursor"
+            if 0 <= vis_col < n:
+                col_styles[vis_col] = self._rich_style(cur_role)
+
+        # Trailing marker for a cursor past EOL and/or a selection continuing
+        # onto the next line. Sets the style for the n-th (past-EOL) column.
+        cursor_at_eol = buf_row == self.buffer.cursor_row and vis_col >= n
+        sel_spans_newline = has_sel_on_line and er >= 0 and buf_row < er
+        if cursor_at_eol:
+            marker_role = "editor.selection_cursor" if sel_spans_newline else "editor.cursor"
+            col_styles[n] = self._rich_style(marker_role)
+        elif sel_spans_newline:
+            col_styles[n] = self._rich_style("editor.selection")
+
+        # Build the Text: gutter, then run-length grouped body (over the string),
+        # then the optional trailing marker space. Plain columns carry ``base``
+        # (the widget's theme style) so they render identically to the old plain
+        # branch.
+        text = Text(style=base)
+        if self.show_line_numbers:
+            line_num = str(buf_row + 1).rjust(gutter - 1)
+            text.append(f"{line_num} ", style=self._rich_style("editor.line_numbers"))
+
+        i = 0
+        while i < n:
+            st = col_styles[i]
+            j = i + 1
+            while j < n and col_styles[j] == st:
+                j += 1
+            text.append(line[i:j], style=st)
+            i = j
+
+        if cursor_at_eol or sel_spans_newline:
+            text.append(" ", style=col_styles[n])
 
         try:
             return Strip(text.render(self.app.console))
@@ -292,25 +401,19 @@ class EditorWidget(ScrollView):
             spans.append((m.col, m.col + m.length, self._rich_style(role)))
         return spans
 
-    def _append_with_search_and_fold(self, text: Text, line: str, buf_row: int) -> None:
-        search_spans = self._get_search_spans_on_row(buf_row)
-        fold_spans = [(s, e, self._rich_style("editor.fold_marker")) for s, e in self._get_fold_placeholders_on_row(buf_row)]
-        all_spans = sorted(search_spans + fold_spans, key=lambda s: s[0])
-        if not all_spans:
-            text.append(line)
-            return
-        pos = 0
-        for start, end, style in all_spans:
-            if start < pos:
-                start = pos
-            if start >= end:
-                continue
-            if start > pos:
-                text.append(line[pos:start])
-            text.append(line[start:end], style=style)
-            pos = end
-        if pos < len(line):
-            text.append(line[pos:])
+    def _syntax_spans_rendered(self, buf_row: int) -> list[tuple[int, int, str]]:
+        """Syntax spans for a buffer row, mapped to rendered-column coords."""
+        if not self._highlight_enabled or not self._highlighter.enabled:
+            return []
+        if buf_row < 0 or buf_row >= len(self._syntax_spans):
+            return []
+        out: list[tuple[int, int, str]] = []
+        for s in self._syntax_spans[buf_row]:
+            start = self._buffer_col_to_rendered_col(buf_row, s.start)
+            end = self._buffer_col_to_rendered_col(buf_row, s.end)
+            if end > start:
+                out.append((start, end, f"editor.syntax.{s.role}"))
+        return out
 
     def set_search_matches(self, matches: list[Match], current_idx: int = -1) -> None:
         self._search_matches = matches
@@ -451,6 +554,7 @@ class EditorWidget(ScrollView):
     def _post_buffer_update(self) -> None:
         self._rescan_folds()
         self._refresh_render()
+        self._schedule_syntax()
         self.post_message(self.BufferModified(self, self.buffer.modified))
         self._post_cursor_update()
 

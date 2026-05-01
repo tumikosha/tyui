@@ -44,7 +44,19 @@ def make_window(
 
 
 class ModalWindow(Window):
-    """A Window with modal behaviour: Esc closes; click outside closes."""
+    """A Window with modal behaviour: Esc closes; click outside closes.
+
+    Modality is enforced by stripping ``can_focus`` from every focusable
+    widget in non-modal sibling windows on mount, and restoring it on
+    unmount. This is the same trick ``ReplaceAllDialog`` used inline; it
+    is centralised here so EVERY dialog opened via ``show_modal`` is
+    actually modal — keys cannot drift to a panel/editor underneath, and
+    Tab cycles only inside the dialog.
+
+    We deliberately avoid ``Widget.disabled`` for the freeze: Textual's
+    opacity pass on disabled widgets crashes on Strips containing
+    ``style=None`` segments (which the windowing frame produces).
+    """
 
     class Dismissed(Message):
         def __init__(self, window: "ModalWindow") -> None:
@@ -53,8 +65,59 @@ class ModalWindow(Window):
 
     BINDINGS = [("escape", "dismiss", "Close")]
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._frozen_focusables: list[Widget] = []
+
     def action_dismiss(self) -> None:
         self.post_message(ModalWindow.Dismissed(self))
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self._freeze_siblings()
+
+    def on_unmount(self) -> None:
+        self._thaw_siblings()
+
+    def _freeze_siblings(self) -> None:
+        # Walk the entire screen (not just `desktop.windows`) so app-level
+        # widgets that live OUTSIDE the Desktop — MenuBar, CommandLine,
+        # StatusBar — also lose focus. Otherwise Tab cycling via
+        # `Screen.focus_next` could drift to e.g. the command-line input
+        # underneath the modal.
+        try:
+            screen = self.screen
+        except Exception:
+            screen = None
+        if screen is None:
+            return
+        modal_descendants = set(self.query("*"))
+        modal_descendants.add(self)
+        for w in screen.query("*"):
+            if w in modal_descendants:
+                continue
+            # Skip anything inside ANOTHER ModalWindow (the topmost one
+            # may overlay; siblings on the modal stack stay live).
+            anc = w
+            inside_modal = False
+            while anc is not None:
+                if isinstance(anc, ModalWindow) and anc is not self:
+                    inside_modal = True
+                    break
+                anc = getattr(anc, "parent", None)
+            if inside_modal:
+                continue
+            if w.can_focus:
+                self._frozen_focusables.append(w)
+                w.can_focus = False
+
+    def _thaw_siblings(self) -> None:
+        for widget in self._frozen_focusables:
+            try:
+                widget.can_focus = True
+            except Exception:
+                pass
+        self._frozen_focusables.clear()
 
 
 def show_modal(
@@ -90,7 +153,10 @@ def show_modal(
     # Dim non-modal windows via palette override by tagging them.
     for w in desktop.windows:
         w.palette_override["window.border.unfocused"] = desktop.palette.get("modal.overlay")
-    desktop.add_window(modal)
-    desktop._modal_stack = getattr(desktop, "_modal_stack", [])
+    # Push onto the modal stack BEFORE add_window so the focus_window call
+    # inside add_window sees the modal as the topmost focus target. Without
+    # this, `add_window` -> `focus_window(modal)` would run before the
+    # gate knew there was a modal active.
     desktop._modal_stack.append(modal)
+    desktop.add_window(modal)
     return modal

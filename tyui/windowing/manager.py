@@ -57,7 +57,7 @@ class WindowManager:
         n = len(visible)
         if n == 0:
             return
-        W, H = self.desktop.size
+        W, H = self.desktop.usable_size
         w_each = max(MIN_W, W // n)
         for i, win in enumerate(visible):
             x = i * w_each
@@ -69,7 +69,7 @@ class WindowManager:
         n = len(visible)
         if n == 0:
             return
-        W, H = self.desktop.size
+        W, H = self.desktop.usable_size
         h_each = max(MIN_H, H // n)
         for i, win in enumerate(visible):
             y = i * h_each
@@ -81,7 +81,7 @@ class WindowManager:
         n = len(visible)
         if n == 0:
             return
-        W, H = self.desktop.size
+        W, H = self.desktop.usable_size
         cols = int(math.ceil(math.sqrt(n)))
         rows = int(math.ceil(n / cols))
         cw = max(MIN_W, W // cols)
@@ -99,7 +99,7 @@ class WindowManager:
         visible = [w for w in self.desktop.windows if w.display]
         if not visible:
             return
-        W, H = self.desktop.size
+        W, H = self.desktop.usable_size
         sw = max(MIN_W, int(W * 0.75))
         sh = max(MIN_H, int(H * 0.75))
         step_x, step_y = 2, 1
@@ -117,7 +117,7 @@ class WindowManager:
             window.maximized = False
         else:
             window.save_rect()
-            W, H = self.desktop.size
+            W, H = self.desktop.usable_size
             self._set_rect(window, Offset(0, 0), Size(max(MIN_W, W), max(MIN_H, H)))
             window.maximized = True
 
@@ -177,7 +177,7 @@ class WindowManager:
         w = self._mode_target
         cur_x = w.region.x
         cur_y = w.region.y
-        W, H = self.desktop.size
+        W, H = self.desktop.usable_size
         new_x = max(0, min(cur_x + dx, W - w.size.width))
         new_y = max(0, min(cur_y + dy, H - w.size.height))
         w.styles.offset = Offset(new_x, new_y)
@@ -186,7 +186,7 @@ class WindowManager:
         if self._mode != "resize" or self._mode_target is None:
             return
         w = self._mode_target
-        W, H = self.desktop.size
+        W, H = self.desktop.usable_size
         new_w = max(MIN_W, min(w.size.width + dw, W - w.region.x))
         new_h = max(MIN_H, min(w.size.height + dh, H - w.region.y))
         w.styles.width = new_w
@@ -195,7 +195,7 @@ class WindowManager:
     # --- helpers -----------------------------------------------------------
 
     def _set_rect(self, w: Window, position: Offset, size: Size) -> None:
-        W, H = self.desktop.size
+        W, H = self.desktop.usable_size
         x = max(0, min(position.x, max(0, W - MIN_W)))
         y = max(0, min(position.y, max(0, H - MIN_H)))
         width = max(MIN_W, min(size.width, W - x))

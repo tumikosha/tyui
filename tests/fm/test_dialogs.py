@@ -121,7 +121,6 @@ async def test_input_dialog_initial_value():
         assert dlg.get_value() == "oldname"
 
 
-import threading
 
 from tyui.fm.dialogs import ProgressDialog
 
@@ -229,3 +228,179 @@ async def test_progress_dialog_mouse_click_outside_button_is_ignored():
             stop=lambda: None,
         ))
         assert not dlg.cancel_event.is_set()
+
+
+# --- Keyboard navigation across dialog buttons --------------------------
+#
+# These regression tests guard the FocusChainMixin behaviour: every modal
+# dialog with multiple buttons must let the user reach each button via
+# Tab / Shift+Tab / Left / Right and activate it via Enter — without
+# touching the mouse.
+
+from tyui.fm.dialogs import (
+    CopyMoveDialog,
+    NewFileDialog,
+    ShadowButton,
+    ChangeAttributesDialog,
+    DialogButton,
+)
+
+
+@pytest.mark.asyncio
+async def test_confirm_dialog_initial_focus_on_yes():
+    dlg = ConfirmDialog(prompt="Delete?")
+    harness = _Harness(dlg)
+    async with harness.run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        focused = harness.focused
+        assert isinstance(focused, ShadowButton)
+        assert focused.id == "cd-yes"
+
+
+@pytest.mark.asyncio
+async def test_confirm_dialog_tab_cycles_yes_no():
+    dlg = ConfirmDialog(prompt="Delete?")
+    harness = _Harness(dlg)
+    async with harness.run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.pause()
+        assert harness.focused.id == "cd-no"
+        await pilot.press("tab")
+        await pilot.pause()
+        assert harness.focused.id == "cd-yes"
+
+
+@pytest.mark.asyncio
+async def test_confirm_dialog_right_left_swap_buttons():
+    dlg = ConfirmDialog(prompt="Delete?")
+    harness = _Harness(dlg)
+    async with harness.run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.press("right")
+        await pilot.pause()
+        assert harness.focused.id == "cd-no"
+        await pilot.press("left")
+        await pilot.pause()
+        assert harness.focused.id == "cd-yes"
+
+
+@pytest.mark.asyncio
+async def test_confirm_dialog_enter_on_no_cancels():
+    dlg = ConfirmDialog(prompt="Delete?")
+    harness = _Harness(dlg)
+    async with harness.run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.press("tab")  # focus -> cd-no
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert harness.results == [False]
+
+
+class _CMHarness(App):
+    def __init__(self, *, initial: str) -> None:
+        super().__init__()
+        self._initial = initial
+        self.dialog: CopyMoveDialog | None = None
+
+    def compose(self) -> ComposeResult:
+        # Construct INSIDE compose: Input(value=...) hits a reactive
+        # watcher that touches self.app, which fails outside an active
+        # app context.
+        self.dialog = CopyMoveDialog(
+            prompt="Copy x to:", initial=self._initial, title="Copy"
+        )
+        yield self.dialog
+
+
+@pytest.mark.asyncio
+async def test_copymove_dialog_tab_chain():
+    harness = _CMHarness(initial="/tmp/x")
+    async with harness.run_test() as pilot:
+        await pilot.pause()
+        harness.dialog.focus_input()
+        await pilot.pause()
+        # input -> ok -> cancel -> input
+        await pilot.press("tab")
+        await pilot.pause()
+        assert harness.focused.id == "cm-ok"
+        await pilot.press("tab")
+        await pilot.pause()
+        assert harness.focused.id == "cm-cancel"
+        await pilot.press("tab")
+        await pilot.pause()
+        from textual.widgets import Input
+        assert isinstance(harness.focused, Input)
+
+
+@pytest.mark.asyncio
+async def test_copymove_dialog_left_in_input_keeps_focus():
+    harness = _CMHarness(initial="abc")
+    async with harness.run_test() as pilot:
+        await pilot.pause()
+        harness.dialog.focus_input()
+        await pilot.pause()
+        from textual.widgets import Input
+        assert isinstance(harness.focused, Input)
+        await pilot.press("left")
+        await pilot.pause()
+        # Focus must still be on the Input — Left moves the cursor inside it.
+        assert isinstance(harness.focused, Input)
+
+
+class _NFHarness(App):
+    def __init__(self, *, initial: str) -> None:
+        super().__init__()
+        self._initial = initial
+        self.dialog: NewFileDialog | None = None
+
+    def compose(self) -> ComposeResult:
+        self.dialog = NewFileDialog(
+            prompt="New file name:", initial=self._initial
+        )
+        yield self.dialog
+
+
+@pytest.mark.asyncio
+async def test_newfile_dialog_tab_chain():
+    harness = _NFHarness(initial="x.txt")
+    async with harness.run_test() as pilot:
+        await pilot.pause()
+        harness.dialog.focus_input()
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.pause()
+        assert harness.focused.id == "nf-create"
+        await pilot.press("tab")
+        await pilot.pause()
+        assert harness.focused.id == "nf-cancel"
+
+
+@pytest.mark.asyncio
+async def test_change_attributes_tab_chain_includes_buttons():
+    """Regression: Tab from the last perm checkbox lands on Set, then
+    Cancel, then wraps back to the first checkbox."""
+    dlg = ChangeAttributesDialog(target_label="x", current_mode=0o644)
+
+    class _CAHarness(App):
+        def compose(self) -> ComposeResult:
+            yield dlg
+
+    async with _CAHarness().run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        # 12 tabs after the initial first-checkbox focus → land on ca-set.
+        for _ in range(12):
+            await pilot.press("tab")
+            await pilot.pause()
+        focused = pilot.app.focused
+        assert isinstance(focused, DialogButton) and focused.id == "ca-set"
+        await pilot.press("tab")
+        await pilot.pause()
+        focused = pilot.app.focused
+        assert isinstance(focused, DialogButton) and focused.id == "ca-cancel"

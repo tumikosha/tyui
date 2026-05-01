@@ -47,7 +47,6 @@ class StatusBar(Widget):
     StatusBar {
         dock: bottom;
         height: 1;
-        layer: overlay;
     }
     """
 

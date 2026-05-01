@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from rich.segment import Segment
 from rich.style import Style as RichStyle
@@ -52,6 +52,8 @@ class IconTray(Container):
     def on_mount(self) -> None:
         self.refresh()
 
+    _HINT_TEXT = "Ctrl+W + "
+
     def render_line(self, y: int) -> Strip:
         width = self.size.width
         bg_style = self.desktop.palette.rich_style("icon_tray.background")
@@ -60,22 +62,28 @@ class IconTray(Container):
             return Strip.blank(0)
         # Build the tray contents.
         icons: list[str] = []
-        for w in self.desktop.minimized_windows:
+        for idx, w in enumerate(self.desktop.minimized_windows):
             title = (w.title.text or "—").strip()
-            # Compact `[■ title]`.
-            icons.append(f"[■ {title[:20]}] ")
+            # First nine icons get a leading digit so the user can hit
+            # Ctrl+W then 1..9 to restore them; the prefix is the same
+            # width as `[■ ` so click hit-testing math is unchanged.
+            prefix = str(idx + 1) if idx < 9 else "■"
+            icons.append(f"[{prefix} {title[:20]}] ")
 
-        content = "".join(icons)
+        hint = self._HINT_TEXT
+        content = hint + "".join(icons)
         if len(content) > width:
             # Overflow indicator
-            overflow = len(self.desktop.minimized_windows) - len(icons)  # placeholder
             content = content[: max(0, width - 7)] + " […+?] "
         padded = content.ljust(width)
         return Strip([Segment(padded[:width], icon_style if icons else bg_style)])
 
     def on_click(self, event: events.Click) -> None:
         # Determine which icon was clicked based on click x position.
-        x = event.x
+        # Account for the hint prefix that precedes all icons.
+        x = event.x - len(self._HINT_TEXT)
+        if x < 0:
+            return
         acc = 0
         for w in self.desktop.minimized_windows:
             title = (w.title.text or "—").strip()
@@ -112,6 +120,11 @@ class Desktop(Container):
         self.hidden_windows: list[Window] = []
         self.minimized_windows: list[Window] = []
         self.focused_window: Window | None = None
+        self._modal_stack: list[Window] = []
+        # Optional host hook fired after every (non-initial) desktop resize,
+        # once self.size already reflects the new size. Hosts use it to
+        # re-apply their own layout (tiling, etc.) with a fresh size.
+        self.on_resized: Callable[[], None] | None = None
         self._icon_tray = IconTray(self)
 
     def _load_theme(self, name: str):
@@ -119,6 +132,13 @@ class Desktop(Container):
             return modern_dark
         from .themes.loader import theme_registry
         return theme_registry.get(name)
+
+    @property
+    def usable_size(self) -> Size:
+        """Size of the area windows may occupy (desktop minus the IconTray)."""
+        from textual.geometry import Size
+        w, h = self.size.width, self.size.height
+        return Size(w, max(0, h - 1))
 
     # --- composition -------------------------------------------------------
 
@@ -153,6 +173,15 @@ class Desktop(Container):
         for coll in (self.windows, self.hidden_windows, self.minimized_windows):
             if window in coll:
                 coll.remove(window)
+        if window in self._modal_stack:
+            self._modal_stack.remove(window)
+            # When the last modal is gone, undo the dim-overlay tags that
+            # show_modal stamped on every other window — otherwise the
+            # borders stay washed out.
+            if not self._modal_stack:
+                for w in self.windows:
+                    w.palette_override.pop("window.border.unfocused", None)
+                    w.refresh()
         if window.is_mounted:
             window.remove()
         if self.focused_window is window:
@@ -178,6 +207,14 @@ class Desktop(Container):
     def focus_window(self, window: Window | None) -> None:
         if window is self.focused_window:
             return
+        # Modal gate: while a modal is on the stack, focus can only land on
+        # the topmost modal. This is the single chokepoint — every public
+        # focus path (click-to-focus via Window.FocusRequested, Tab via
+        # cycle_focus, programmatic add_window) funnels through here.
+        if self._has_modal() and not self._is_focusable_under_modal(window):
+            window = self._modal_stack[-1]
+            if window is self.focused_window:
+                return
         prev = self.focused_window
         self.focused_window = window
         if prev is not None and prev.is_mounted:
@@ -206,6 +243,14 @@ class Desktop(Container):
             pass
 
     def cycle_focus(self, direction: int = 1) -> None:
+        # Tab between windows is suppressed while a modal is up — focus
+        # must stay inside the modal. Without this guard cycle_focus would
+        # hand keyboard focus to a panel underneath the dialog.
+        if self._has_modal():
+            top = self._modal_stack[-1]
+            if top is not self.focused_window:
+                self.focus_window(top)
+            return
         visible = [w for w in self.windows if w.display]
         if not visible:
             return
@@ -215,6 +260,16 @@ class Desktop(Container):
         idx = visible.index(self.focused_window)
         new_idx = (idx + direction) % len(visible)
         self.focus_window(visible[new_idx])
+
+    # --- modal gating ------------------------------------------------------
+
+    def _has_modal(self) -> bool:
+        return bool(self._modal_stack)
+
+    def _is_focusable_under_modal(self, window: Window | None) -> bool:
+        if window is None:
+            return False
+        return window in self._modal_stack
 
     def hide_window(self, window: Window) -> None:
         if window not in self.windows:
@@ -267,7 +322,12 @@ class Desktop(Container):
         message.stop()
 
     def on_window_closed(self, message: Window.Closed) -> None:
-        self.remove_window(message.window)
+        # A window flagged ``hide_on_close`` (e.g. the fm file panels, which
+        # are looked up by id elsewhere) is hidden rather than destroyed.
+        if getattr(message.window, "hide_on_close", False):
+            self.hide_window(message.window)
+        else:
+            self.remove_window(message.window)
         message.stop()
 
     # --- background rendering ---------------------------------------------
@@ -307,8 +367,31 @@ class Desktop(Container):
             # their styled width/height. Reading window.size would yield 0 and
             # we'd clobber every window to 3×3. Skip.
             return
+        # Windows occupy the usable area (desktop minus the 1-row IconTray),
+        # matching what `WindowManager.toggle_maximize` uses.
+        usable_w, usable_h = w, max(0, h - 1)
         for win in self.windows + self.hidden_windows + self.minimized_windows:
-            self._clamp_window(win, w, h)
+            if getattr(win, "maximized", False):
+                # A maximized window must keep filling the desktop, so its
+                # full-bounds geometry is re-applied on every resize.
+                # `_clamp_window` only clamps *down* (min), so on its own it
+                # would never grow the window when the terminal is enlarged.
+                self._fill_window(win, usable_w, usable_h)
+            else:
+                self._clamp_window(win, w, h)
+        # Notify the host so it can re-apply its own layout now that
+        # self.size is current (App.on_resize fires too early for this).
+        if self.on_resized is not None:
+            self.on_resized()
+
+    def _fill_window(self, window: Window, bounds_w: int, bounds_h: int) -> None:
+        if not window.is_mounted:
+            return
+        from textual.geometry import Offset
+
+        window.styles.offset = Offset(0, 0)
+        window.styles.width = max(3, bounds_w)
+        window.styles.height = max(3, bounds_h)
 
     def _clamp_window(self, window: Window, bounds_w: int, bounds_h: int) -> None:
         if not window.is_mounted:

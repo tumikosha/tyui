@@ -56,6 +56,17 @@ async def test_app_editor_mode_hides_panels_initially():
         assert all_panel_ids.isdisjoint(visible_ids)
 
 
+async def test_editor_menu_exposes_syntax_commands():
+    """The Editor menu must surface the syntax-highlight toggle and language picker."""
+    app = TyuiApp(launch_mode="editor", initial_path="/tmp/foo.txt")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor_menu = next(m for m in app._all_menus if m.label == "Editor")
+        cmd_ids = {getattr(item, "command_id", None) for item in editor_menu.items}
+        assert "toggle_syntax" in cmd_ids
+        assert "set_language" in cmd_ids
+
+
 @pytest.mark.asyncio
 async def test_app_cli_mode_hides_panels_and_mounts_agent_stub():
     app = TyuiApp(launch_mode="cli")
@@ -129,23 +140,32 @@ def _focused_panel_id(app):
 
 @pytest.mark.asyncio
 async def test_app_left_panel_has_focus_on_mount_in_fm_mode():
+    # On startup with no file argument, panel-left holds Textual widget
+    # focus so arrow keys move the selection out of the box.
     app = TyuiApp(launch_mode="fm", initial_path="/tmp")
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert app.focused is not None
+        await pilot.pause()  # allow call_after_refresh to fire
         assert _focused_panel_id(app) == "panel-left"
+        # The active panel window is also panel-left.
+        assert app.desktop is not None
+        assert app.desktop.focused_window is not None
+        assert app.desktop.focused_window.id == "panel-left"
 
 
 @pytest.mark.asyncio
 async def test_app_tab_alternates_panels(tmp_path):
+    # Startup: panel-left has Textual focus.
+    # Tab #1: panel-left → panel-right  (normal panel swap)
+    # Tab #2: panel-right → panel-left  (normal panel swap)
     app = TyuiApp(launch_mode="fm", initial_path=str(tmp_path))
     async with app.run_test() as pilot:
         await pilot.pause()
-        # Press Tab — should land on panel-right (or its content).
+        await pilot.pause()
+        assert _focused_panel_id(app) == "panel-left"
         await pilot.press("tab")
         await pilot.pause()
         assert _focused_panel_id(app) == "panel-right"
-        # Press Tab again — back to panel-left.
         await pilot.press("tab")
         await pilot.pause()
         assert _focused_panel_id(app) == "panel-left"
@@ -184,27 +204,34 @@ async def test_app_panels_have_entries_after_mount(tmp_path):
 
 @pytest.mark.asyncio
 async def test_app_f9_then_esc_returns_focus_to_panel(tmp_path):
-    """F9 enters the menu, Esc returns focus to the previously active panel."""
+    """F9 enters the menu, Esc returns focus to whatever was focused before."""
     app = TyuiApp(launch_mode="fm", initial_path=str(tmp_path))
     async with app.run_test() as pilot:
         await pilot.pause()
-        # Sanity: panel-left has focus on mount.
+        await pilot.pause()
+        # Sanity: on startup panel-left has Textual focus.
         assert _focused_panel_id(app) == "panel-left"
+        assert app.desktop is not None
+        assert app.desktop.focused_window is not None
+        assert app.desktop.focused_window.id == "panel-left"
         await pilot.press("f9")
         await pilot.pause()
         # MenuBar is now focused — no panel id under app.focused.
         assert _focused_panel_id(app) is None
         await pilot.press("escape")
         await pilot.pause()
-        # Focus is back on the panel.
-        assert _focused_panel_id(app) == "panel-left"
+        # Focus is back on whatever had focus before F9 (the cmdline input).
+        assert app.focused is not None
+        # The active panel window is still panel-left.
+        assert app.desktop.focused_window.id == "panel-left"
 
 
 @pytest.mark.asyncio
 async def test_app_panels_fill_full_desktop_width():
-    """Two panels combined should cover the entire desktop width and
-    height with no gap; each ~half the width. This verifies the deferred
-    layout fired and overrode the hard-coded 40x12 placeholder size."""
+    """Two panels combined cover the full desktop width; each ~half wide.
+    Panels occupy the top half of the desktop (the bottom half belongs to
+    console-default, mounted eagerly), with the IconTray's bottom row
+    reserved."""
     from tyui.windowing import Desktop, Window
 
     app = TyuiApp(launch_mode="fm", initial_path="/tmp")
@@ -219,9 +246,11 @@ async def test_app_panels_fill_full_desktop_width():
         # Neither panel is the placeholder 40-wide.
         assert left.size.width > 40 or desktop.size.width <= 80
         assert right.size.width > 40 or desktop.size.width <= 80
-        # Panels span the full desktop height (after fill-the-screen layout).
-        assert left.size.height == desktop.size.height
-        assert right.size.height == desktop.size.height
+        # Panels span the top half of the usable desktop (excluding the
+        # IconTray's bottom row).
+        usable = desktop.size.height - 1
+        assert left.size.height == usable - usable // 2
+        assert right.size.height == left.size.height
 
 
 @pytest.mark.asyncio
@@ -233,9 +262,9 @@ async def test_app_f7_creates_directory_in_active_panel(tmp_path):
         await pilot.pause()
         await pilot.press("f7")
         await pilot.pause()
-        from tyui.fm.dialogs import InputDialog
-        dialog = app.query_one(InputDialog)
-        dialog.set_value("newdir")
+        from tyui.fm.dialogs import NewFileDialog
+        dialog = app.query_one(NewFileDialog)
+        dialog._input.value = "newdir"
         dialog.action_submit()
         await pilot.pause()
         assert (tmp_path / "newdir").is_dir()
@@ -249,8 +278,8 @@ async def test_app_f7_cancel_does_not_create_anything(tmp_path):
         await pilot.pause()
         await pilot.press("f7")
         await pilot.pause()
-        from tyui.fm.dialogs import InputDialog
-        dialog = app.query_one(InputDialog)
+        from tyui.fm.dialogs import NewFileDialog
+        dialog = app.query_one(NewFileDialog)
         dialog.action_cancel()
         await pilot.pause()
         # No new entries should have appeared.
@@ -464,18 +493,25 @@ async def test_app_tab_is_gated_while_modal_active(tmp_path):
         panel.cursor = idx
         await pilot.press("f8")
         await pilot.pause()
-        from tyui.fm.dialogs import ConfirmDialog
+        from tyui.fm.dialogs import ConfirmDialog, ShadowButton
         confirm = app.query_one(ConfirmDialog)
-        # Sanity: dialog is focused.
-        assert app.focused is confirm
-        # Tab must not change focus.
+        # Sanity: focus is on a button INSIDE the dialog (Yes by default).
+        # The exact widget changed when keyboard-nav was added — what
+        # matters here is that focus stays inside the modal.
+        def _focus_in_dialog() -> bool:
+            f = app.focused
+            return f is confirm or (
+                isinstance(f, ShadowButton) and confirm in f.ancestors
+            )
+        assert _focus_in_dialog()
+        # Tab cycles between Yes/No INSIDE the dialog — must stay inside.
         await pilot.press("tab")
         await pilot.pause()
-        assert app.focused is confirm
-        # Alt+L / Alt+R also gated.
+        assert _focus_in_dialog()
+        # Alt+L / Alt+R must not switch to panels.
         await pilot.press("alt+r")
         await pilot.pause()
-        assert app.focused is confirm
+        assert _focus_in_dialog()
         # Cleanup: cancel the dialog so the test doesn't leak the modal.
         confirm.action_cancel()
         await pilot.pause()
@@ -495,9 +531,11 @@ async def test_app_inactive_panel_cursor_does_not_invert(tmp_path):
         desktop = app.query_one(Desktop)
         left = desktop.query_one("#panel-left", Window).content
         right = desktop.query_one("#panel-right", Window).content
-        # panel-left has focus on mount.
-        assert left.has_focus
-        assert not right.has_focus
+        # panel-left is the active panel on mount (desktop.focused_window).
+        # The CommandLine input holds Textual widget focus, so has_focus
+        # will be False for both panels — use _is_active_panel instead.
+        assert left._is_active_panel
+        assert not right._is_active_panel
 
         # Cursor row of left panel: reverse=True.
         left_cursor_row = 1 + (left.cursor - left.row_offset)
@@ -582,6 +620,10 @@ async def test_app_enter_on_file_opens_editor_window(tmp_path):
         left = desktop.query_one("#panel-left", Window).content
         idx = next(i for i, e in enumerate(left.entries) if e.name == "y.txt")
         left.cursor = idx
+        # Ensure the panel has Textual widget focus so Enter routes to it
+        # (not to the CommandLine input which holds focus at startup).
+        app._focus_panel("panel-left")
+        await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
         editor_windows = [w for w in desktop.windows if isinstance(w.content, EditorContent)]

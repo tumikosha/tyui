@@ -19,28 +19,42 @@ from typing import Callable, Literal
 from rich.segment import Segment
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Vertical
 from textual.geometry import Offset, Size
 from textual.strip import Strip
 
 from tyui.fm.actions import (
     OpResult,
+    chmod_paths,
     copy_paths,
     delete_paths,
     mkdir_at,
     move_paths,
 )
 from tyui.fm.commandline import CommandLine
+from tyui.fm.console.backends import make_backend
+import tyui.fm.console.backends.subprocess_be as _subprocess_be  # noqa: F401 — registers "subprocess"
+import tyui.fm.console.backends.pty_be  # noqa: F401 — registers "pty" on POSIX
+from tyui.fm.console.history import History
+from tyui.fm.console.registry import ConsoleRegistry
+from tyui.fm.console.runner import CommandRunner
+from tyui.fm.console.window import ConsoleContent
 from tyui.fm.dialogs import (
+    ChangeAttributesDialog,
     ConfirmDialog,
     CopyMoveDialog,
+    FindFileDialog,
     InputDialog,
     NewFileDialog,
     ProgressDialog,
 )
 from tyui.fm.file_panel import FilePanel
+from tyui.fm.find_file import FindOptions, walk as find_walk
+from tyui.fm.find_results import SearchResultsContent
 from tyui.fm.keymap import DEFAULT_FKEY_LABELS, EDITOR_FKEY_LABELS
 from tyui.fm.sort import SortOrder
 from tyui.windowing import (
+    BorderStyle,
     CommandDispatcher,
     CommandPaletteContent,
     CommandRegistry,
@@ -63,6 +77,7 @@ from tyui.windowing import (
     show_modal,
 )
 from tyui.windowing.content import WindowContent
+from tyui.windowing.editor.language_picker import show_language_picker
 from tyui.fm.hex_viewer import HexViewerContent, HexViewerWidget
 from tyui.fm.viewer import ViewerContent
 from tyui.windowing.editor import EditorContent
@@ -79,6 +94,15 @@ class _FocusableEditorContent(EditorContent):
 
     def on_mount(self) -> None:
         self._editor.focus()
+
+    def focus(self, scroll_visible: bool = True):
+        # Forward focus to the inner editor widget so click/tab focus
+        # via Desktop.focus_window lands on the actual key target.
+        try:
+            self._editor.focus()
+        except Exception:
+            return super().focus(scroll_visible)
+        return self
 from tyui.windowing.helpers import ModalWindow
 
 
@@ -118,13 +142,46 @@ class SaveAsRequest:
 
 
 @dataclass(frozen=True)
+class ChangeAttributesRequest:
+    targets: list[Path]
+
+
+@dataclass(frozen=True)
 class HexSearchRequest:
     """Routes the InputDialog used by F3 hex viewer back to its widget."""
 
     widget: HexViewerWidget
 
 
-LaunchMode = Literal["fm", "editor", "cli"]
+@dataclass(frozen=True)
+class FindFileRequest:
+    """Settings for one Find-file run, attached to the dialog context."""
+
+    options: FindOptions
+    start_dir: Path
+
+
+@dataclass(frozen=True)
+class OpenFileRequest:
+    """Marker context: the InputDialog value is a path to open in the editor."""
+
+
+@dataclass(frozen=True)
+class CancelSearchRequest:
+    """Routes the Yes/No interrupt confirmation back to the SearchResultsContent."""
+
+    content: SearchResultsContent
+
+
+LaunchMode = Literal["fm", "editor", "cli", "we"]
+
+# `we`-mode cascade geometry: each successive editor window is shifted by
+# (_WE_CASCADE_DX, _WE_CASCADE_DY); all windows share one shrunk size so the
+# last file's bottom-right corner pins to the desktop corner.
+_WE_CASCADE_DX = 2
+_WE_CASCADE_DY = 1
+_WE_MIN_W = 20
+_WE_MIN_H = 6
 
 
 class _StubContent(WindowContent):
@@ -149,7 +206,10 @@ class TyuiApp(App):
 
     CSS = """
     Screen { background: $panel; }
-    Desktop { margin-top: 1; margin-bottom: 2; }
+    Desktop { margin-top: 1; }
+    Vertical#bottom-stack { dock: bottom; height: auto; }
+    #bottom-stack > CommandLine { height: auto; }
+    #bottom-stack > StatusBar { height: 1; }
     """
 
     BINDINGS = [
@@ -173,6 +233,15 @@ class TyuiApp(App):
         Binding("shift+tab", "cycle_window", "Other window", show=False, priority=True),
         Binding("alt+l", "focus_left_panel", "Left panel", show=False),
         Binding("alt+r", "focus_right_panel", "Right panel", show=False),
+        Binding("alt+c", "focus_command_line", "Command line", show=False, priority=True),
+        # IconTray restore: Ctrl+W is a chord prefix; the next 1..9 keypress
+        # restores the corresponding tray icon. Priority so it fires even
+        # when an editor / Input has focus. Ctrl-digit alone doesn't work
+        # in macOS Terminal.app / iTerm2 (no escape sequence emitted), and
+        # Alt-digit needs "Esc as Meta" to be enabled in the terminal —
+        # the chord-style works everywhere, mirrors tmux/screen prefix
+        # idiom.
+        Binding("ctrl+w", "tray_chord_start", show=False, priority=True),
     ]
 
     def __init__(
@@ -180,6 +249,7 @@ class TyuiApp(App):
         *,
         launch_mode: LaunchMode = "fm",
         initial_path: str | Path | None = None,
+        initial_paths: list[str | Path] | None = None,
     ) -> None:
         super().__init__()
         # Drop Textual's built-in priority ctrl+q→quit binding so the key is
@@ -190,6 +260,9 @@ class TyuiApp(App):
         self.initial_path: Path | None = (
             Path(initial_path).expanduser() if initial_path else None
         )
+        self.initial_paths: list[Path] = [
+            Path(p).expanduser() for p in (initial_paths or [])
+        ]
         self.desktop: Desktop | None = None
         self.menu_bar: MenuBar | None = None
         self.status_bar: StatusBar | None = None
@@ -211,7 +284,27 @@ class TyuiApp(App):
         self.command_registry: CommandRegistry = CommandRegistry()
         self.dispatcher: CommandDispatcher | None = None
         self.router: CommandRouter | None = None
+        # Tracks the last panel window that held desktop focus.  Used so
+        # F-key commands and _active_panel() still resolve correctly when
+        # Textual widget focus is on the CommandLine input rather than a
+        # panel content widget.
+        self._last_focused_panel_window: Window | None = None
         self._active_dropdown: Dropdown | None = None
+        self.console_registry: ConsoleRegistry[ConsoleContent] = ConsoleRegistry(
+            factory=self._create_console_content,
+        )
+        self.command_history: History | None = None
+        self.command_runner: CommandRunner | None = None
+        self._pre_console_focus = None
+        self._console_default_window = None
+        self._editor_seq = 0
+        # Ids of the editor windows created by the `we`-mode cascade, so the
+        # deferred geometry callback only ever resizes THIS cascade's windows
+        # (never a later F4-opened editor, never panels).
+        self._cascade_ids: list[str] = []
+        # True for one keypress after Ctrl+W: the next digit (1-9) restores
+        # that tray icon. Cleared on any keypress (digit or otherwise).
+        self._tray_chord_pending: bool = False
         # Full menu list, including focus-scoped menus like "Editor" that
         # are only mounted on `menu_bar.menus` while a relevant window is
         # focused.
@@ -220,25 +313,70 @@ class TyuiApp(App):
     def compose(self) -> ComposeResult:
         self.menu_bar = MenuBar()
         self.desktop = Desktop(theme_name="modern_dark")
-        self.command_line = CommandLine(id="cmdline")
+        hist_path = Path.home() / ".config" / "tyui" / "history"
+        self.command_history = History(hist_path, cap=1000)
+        self.command_line = CommandLine(id="cmdline", history=self.command_history)
         self.status_bar = StatusBar(items=self._panel_status_items())
         yield self.menu_bar
         yield self.desktop
-        yield self.command_line
-        yield self.status_bar
+        # Wrap the bottom strip in a Vertical so cmdline and statusbar
+        # stack as proper 2 separate rows (multiple `dock: bottom` widgets
+        # at the same edge collapse into one row in Textual).
+        with Vertical(id="bottom-stack"):
+            yield self.command_line
+            yield self.status_bar
 
     def on_mount(self) -> None:
         assert self.desktop is not None and self.menu_bar is not None
         self.manager = WindowManager(self.desktop)
+        # Re-tile panels / refill cascade editors whenever the desktop is
+        # resized. Hooked on the Desktop (not App.on_resize) because there
+        # Desktop.size already reflects the new terminal size.
+        self.desktop.on_resized = self._relayout_after_resize
         self.dispatcher = CommandDispatcher(self.desktop, self.command_registry)
         self.router = CommandRouter(self.dispatcher)
+        self.command_runner = CommandRunner(
+            registry=self.console_registry,
+            backend=make_backend("subprocess"),
+            panel_cwd_getter=self._panel_cwd_for_test,
+            panel_cd=self._panel_cd,
+            on_busy_changed=self._on_console_busy_changed,
+        )
+
+        # Replace the runner's default no-op backend-request hook so :backend
+        # switches actually swap the runner's backend.
+        def _on_backend_request(name: str) -> None:
+            if self.command_runner is None:
+                return
+            target = self.console_registry.get_or_create(None)
+            try:
+                self.command_runner.set_backend(make_backend(name))
+                target.append(f"[backend switched to {name}]\n".encode())
+            except Exception as e:
+                target.append(f"[backend {name} unavailable: {e}]\n".encode())
+
+        self.command_runner._on_backend_request = _on_backend_request  # type: ignore[assignment]
+
         self._register_app_commands()
         self.menu_bar.bind_dispatcher(self.dispatcher)
         self._build_menus()
         self._mount_initial_windows()
         self._refresh_panels()
         if self.launch_mode == "fm":
+            # Eagerly mount console-default so the layout is stable from
+            # the start — panels occupy the top half, console the bottom
+            # half. Without this, the first command would suddenly resize
+            # the panels.
+            self.console_registry.get_or_create(None)
+            # add_window focuses the new console window; restore active
+            # panel afterwards so F-key routing lands on panel-left.
             self._focus_panel("panel-left")
+            # Default focus rule: with a file argument the user is in
+            # "open this thing" mode and the cmdline is more useful as the
+            # initial focus; without one, they're browsing — keep keyboard
+            # focus on the active panel so arrow keys move the selection.
+            if self.initial_path is not None and self.initial_path.is_file():
+                self.call_after_refresh(self._focus_command_line)
         # Watch the menu bar's active index: when it transitions to None
         # the menu was dismissed (Esc / item chosen), so restore focus to
         # whatever was active before F9.
@@ -260,6 +398,8 @@ class TyuiApp(App):
             return
         if isinstance(ctx, DeleteRequest):
             self._run_delete(ctx)
+        elif isinstance(ctx, CancelSearchRequest):
+            ctx.content.cancel_event.set()
 
     def on_copy_move_dialog_submitted(
         self, event: CopyMoveDialog.Submitted
@@ -348,16 +488,20 @@ class TyuiApp(App):
 
     def on_input_dialog_submitted(self, event: InputDialog.Submitted) -> None:
         ctx = event.dialog.context
-        if isinstance(ctx, MkdirRequest) and event.value:
-            result = mkdir_at(ctx.parent, event.value)
-            self._report_op_result("mkdir", result)
-            self._refresh_panels()
-        elif isinstance(ctx, HexSearchRequest) and event.value:
+        if isinstance(ctx, HexSearchRequest) and event.value:
             # Close modal first so the viewer is back on top before we scroll
             # — otherwise the post-search refresh paints behind the dialog.
             self._close_modal(event.dialog)
             ctx.widget.search(event.value)
             ctx.widget.focus()
+            return
+        if isinstance(ctx, OpenFileRequest):
+            self._close_modal(event.dialog)
+            raw = event.value.strip()
+            if raw:
+                target = Path(raw).expanduser()
+                if not target.is_dir():
+                    self._open_editor_window(target, read_only=False)
             return
         self._close_modal(event.dialog)
 
@@ -381,28 +525,38 @@ class TyuiApp(App):
         self._close_modal(event.dialog)
 
     def _report_op_result(self, op_name: str, result: OpResult) -> None:
-        """Hook for surfacing OpResult.errors to the user.
+        """Surface OpResult.errors to the default console window."""
+        if not result.errors:
+            return
+        if self.command_runner is None:
+            return
+        target = self.console_registry.get_or_create(None)
+        for err in result.errors:
+            target.append(f"{op_name}: {err}\n".encode())
 
-        Phase 5 (CommandRunner / ConsoleOutputWindow) wires this to the
-        console output window. Until then the errors are silently dropped
-        — but every action call site already passes through this seam so
-        Phase 5 is a one-place change.
+    def _relayout_after_resize(self) -> None:
+        """Re-tile panels and refill cascade editors after a terminal resize.
+
+        Driven by ``Desktop.on_resize`` (via ``Desktop.on_resized``) rather
+        than the App's own resize event, because at that point ``Desktop.size``
+        already reflects the new terminal size. App.on_resize fires too early —
+        ``Desktop.size`` still lags — so panels would re-tile to the previous
+        half-width (notably in we/editor/cli, where no later layout pass
+        corrects it).
+
+        Panels are tiled to halves in every mode. In editor/cli/we they may be
+        hidden, in which case this is a harmless no-op until they're revealed.
+        Without re-tiling, a resize leaves panels at stale geometry: the
+        Desktop's clamp only shrinks (never grows) and, on shrink, slides an
+        out-of-bounds panel inward — so the two panels overlap on shrink and
+        don't grow on enlarge.
         """
-        # Intentionally a no-op for Phase 3.
-        return
-
-    def on_resize(self, event) -> None:
-        # Re-tile when the terminal resizes so panels keep filling the
-        # full width. Guard on `self.manager` because Textual fires the
-        # first Resize event before `on_mount` has finished — at that
-        # point WindowManager isn't constructed yet and the windows
-        # haven't been mounted onto the Desktop.
-        if (
-            self.launch_mode == "fm"
-            and self.desktop is not None
-            and self.manager is not None
-        ):
-            self._apply_default_layout()
+        if self.desktop is None or self.manager is None:
+            return
+        self._tile_panels()
+        # we-mode cascade editor windows must keep filling the desktop too.
+        if self._cascade_ids:
+            self._apply_cascade_geometry()
 
     # --- private helpers --------------------------------------------------
 
@@ -420,14 +574,32 @@ class TyuiApp(App):
         cmds = [
             WindowCommand(id="app.menu", label="Menu", handler=self.action_menu),
             WindowCommand(id="app.quit", label="Quit", handler=self.exit),
+            WindowCommand(id="app.open_file", label="Open File...", handler=self.action_open_file),
             WindowCommand(id="view.tile_h", label="Tile horizontal", handler=lambda: m.tile_horizontal()),
-            WindowCommand(id="view.tile_v", label="Tile vertical", handler=lambda: m.tile_vertical()),
-            WindowCommand(id="view.cascade", label="Cascade", handler=lambda: m.cascade()),
+            WindowCommand(id="view.tile_v", label="Tile vertical", handler=lambda: m.tile_vertical(), hotkey="ctrl+u"),
+            WindowCommand(id="view.cascade", label="Cascade", handler=lambda: m.cascade(), hotkey="ctrl+b"),
+            # Terminal-independent alias for the alt+c command-line focus
+            # binding: macOS Terminal/iTerm send Option+C as the literal
+            # character "ç" (unless "Use Option as Meta" is on), so alt+c
+            # never reaches the app there. Ctrl+E always does. alt+c stays in
+            # BINDINGS for terminals that do forward Meta.
+            WindowCommand(
+                id="app.focus_command_line",
+                label="Command line",
+                handler=self._focus_command_line,
+                hotkey="ctrl+e",
+            ),
             WindowCommand(id="window.hide", label="Hide", handler=lambda: m.hide_focused()),
             WindowCommand(id="window.maximize", label="Maximize", handler=lambda: m.maximize_focused(), hotkey="f5"),
-            WindowCommand(id="panel.focus_left", label="Focus left panel", handler=lambda: self._focus_panel("panel-left")),
-            WindowCommand(id="panel.focus_right", label="Focus right panel", handler=lambda: self._focus_panel("panel-right")),
+            WindowCommand(id="panel.left.toggle", label="Toggle Left Panel", handler=lambda: self._toggle_panel("panel-left"), hotkey="ctrl+1"),
+            WindowCommand(id="panel.right.toggle", label="Toggle Right Panel", handler=lambda: self._toggle_panel("panel-right"), hotkey="ctrl+2"),
             WindowCommand(id="palette.open", label="Command Palette", handler=self.action_open_palette, hotkey="ctrl+p"),
+            WindowCommand(
+                id="console.toggle",
+                label="Toggle console",
+                handler=self.action_toggle_console,
+                hotkey="ctrl+o",
+            ),
         ]
         # Per-panel sort commands. Side-suffixed labels are what the command
         # palette shows; menu items override the label so the dropdown reads
@@ -450,6 +622,20 @@ class TyuiApp(App):
         if self.dispatcher is None or self.desktop is None:
             return
         show_command_palette(self.desktop, self.dispatcher)
+
+    def action_open_file(self) -> None:
+        if self.desktop is None:
+            return
+        if self._has_active_modal():
+            return
+        self._remember_active_panel_id()
+        dialog = InputDialog(
+            "Open file (path):",
+            initial="",
+            context=OpenFileRequest(),
+        )
+        show_modal(self.desktop, dialog, title="Open File", size=(60, 5))
+        self.call_after_refresh(dialog.focus_input)
 
     def on_command_palette_content_picked(self, message) -> None:
         win = self._modal_window_for(message.palette)
@@ -484,7 +670,7 @@ class TyuiApp(App):
         assert self.menu_bar is not None
         self._all_menus = [
             Menu("Left", [
-                MenuItem(command_id="panel.focus_left"),
+                MenuItem(label="Toggle visibility", command_id="panel.left.toggle"),
                 MenuSeparator(),
                 MenuItem(label="Sort by name",      command_id="panel.left.sort_name"),
                 MenuItem(label="Sort by extension", command_id="panel.left.sort_ext"),
@@ -492,21 +678,28 @@ class TyuiApp(App):
                 MenuItem(label="Sort by date",      command_id="panel.left.sort_mtime"),
             ]),
             Menu("File", [
+                MenuItem(command_id="app.open_file"),
+                MenuSeparator(),
                 MenuItem(command_id="panel.new"),
                 MenuItem(command_id="panel.view"),
                 MenuItem(command_id="panel.edit"),
                 MenuSeparator(),
+                MenuItem(command_id="panel.chmod"),
+                MenuSeparator(),
                 MenuItem(command_id="save"),
                 MenuItem(command_id="save_as"),
+                MenuSeparator(),
+                MenuItem(label="Exit", command_id="app.quit"),
             ]),
             Menu("Command", [
                 MenuItem(command_id="panel.copy"),
                 MenuItem(command_id="panel.move"),
                 MenuItem(command_id="panel.mkdir"),
                 MenuItem(command_id="panel.delete"),
+                MenuItem(command_id="panel.find_file"),
             ]),
             Menu("Right", [
-                MenuItem(command_id="panel.focus_right"),
+                MenuItem(label="Toggle visibility", command_id="panel.right.toggle"),
                 MenuSeparator(),
                 MenuItem(label="Sort by name",      command_id="panel.right.sort_name"),
                 MenuItem(label="Sort by extension", command_id="panel.right.sort_ext"),
@@ -529,13 +722,13 @@ class TyuiApp(App):
                 MenuItem(command_id="fold_all"),
                 MenuItem(command_id="unfold_all"),
                 MenuItem(command_id="record_macro"),
+                MenuSeparator(),
+                MenuItem(command_id="toggle_syntax"),
+                MenuItem(command_id="set_language"),
             ]),
             # Items are rebuilt on every menu activation by
             # ``_refresh_windows_menu``; the empty list here is a placeholder.
             Menu("Windows", []),
-            Menu("Help", [
-                MenuItem(command_id="app.quit"),
-            ]),
         ]
         self._recompute_menu_bar()
 
@@ -663,6 +856,19 @@ class TyuiApp(App):
                     handler=(lambda win=w: self._select_window(win)),
                 )
             )
+        # Minimized windows: list them after a separator with a [■] prefix
+        # so they can be restored from the menu (in addition to clicking
+        # their icon in the IconTray).
+        if self.desktop.minimized_windows:
+            if items:
+                items.append(MenuSeparator())
+            for w in list(self.desktop.minimized_windows):
+                items.append(
+                    MenuItem(
+                        label=f"[■] {_title(w)}",
+                        handler=(lambda win=w: self._select_window(win)),
+                    )
+                )
         if not items:
             items = [MenuItem(label="(no windows)", enabled=False)]
         items.append(MenuSeparator())
@@ -674,14 +880,20 @@ class TyuiApp(App):
     def _select_window(self, win: Window) -> None:
         """Focus ``win`` from a Windows-menu pick.
 
-        Updates the post-menu restore target so ``_on_menu_active_index_changed``
-        keeps focus on the chosen window instead of bouncing back to the
-        window that was active when the menu opened.
+        If the picked window is currently minimized, restore it first
+        (``Desktop.restore_window`` already focuses it). Otherwise just
+        focus directly. Updates the post-menu restore target so
+        ``_on_menu_active_index_changed`` keeps focus on the chosen window
+        instead of bouncing back to the window that was active when the
+        menu opened.
         """
         if self.desktop is None:
             return
         try:
-            self.desktop.focus_window(win)
+            if win in self.desktop.minimized_windows:
+                self.desktop.restore_window(win)
+            else:
+                self.desktop.focus_window(win)
         except Exception:
             return
         self._pre_menu_window = win
@@ -733,18 +945,99 @@ class TyuiApp(App):
             self._add_panel_windows(cwd, visible=False)
             return
 
+        if self.launch_mode == "we":
+            self._add_panel_windows(cwd, visible=False)
+            self._mount_cascaded_editors()
+            return
+
         raise ValueError(f"unknown launch_mode: {self.launch_mode!r}")
+
+    def _mount_cascaded_editors(self) -> None:
+        assert self.desktop is not None
+        # Filter: directories are skipped; missing files are kept (they open
+        # as an empty buffer that saves to that path on Ctrl+S).
+        files: list[Path] = []
+        for p in self.initial_paths:
+            if p.is_dir():
+                self.notify(f"skipped {p}: not a file", severity="warning")
+                continue
+            files.append(p)
+
+        self._cascade_ids = []
+
+        if not files:
+            # No usable paths -> a single untitled editor window.
+            self._editor_seq += 1
+            win_id = f"editor-{self._editor_seq}"
+            win = self._make_editor_window(
+                None,
+                position=(0, 0),
+                size=(_WE_MIN_W, _WE_MIN_H),
+                win_id=win_id,
+            )
+            self.desktop.add_window(win)
+            self._cascade_ids.append(win_id)
+        else:
+            n = len(files)
+            # Add in reverse so the first file is added LAST -> ends up on top
+            # of the z-order and focused, sitting at offset (0, 0).
+            for i in reversed(range(n)):
+                self._editor_seq += 1
+                win_id = f"editor-{self._editor_seq}"
+                win = self._make_editor_window(
+                    files[i],
+                    position=(i * _WE_CASCADE_DX, i * _WE_CASCADE_DY),
+                    size=(_WE_MIN_W, _WE_MIN_H),
+                    win_id=win_id,
+                )
+                self.desktop.add_window(win)
+                self._cascade_ids.append(win_id)
+
+        # Defer geometry to after Textual has done its first layout pass so
+        # that usable_size is non-zero.
+        self.call_after_refresh(self._apply_cascade_geometry)
+
+    def _apply_cascade_geometry(self) -> None:
+        """Resize cascade editor windows to fill the desktop.
+
+        Called via call_after_refresh so Desktop.usable_size is non-zero.
+        Scoped to the ids captured in `_cascade_ids` so it never touches a
+        later F4-opened editor or a panel.
+        """
+        assert self.desktop is not None
+        W = self.desktop.usable_size.width
+        H = self.desktop.usable_size.height
+        if W <= 0 or H <= 0:
+            return
+        n = len(self._cascade_ids)
+        if n == 0:
+            return
+        cw = max(_WE_MIN_W, W - (n - 1) * _WE_CASCADE_DX)
+        ch = max(_WE_MIN_H, H - (n - 1) * _WE_CASCADE_DY)
+        for wid in self._cascade_ids:
+            try:
+                win = self.desktop.query_one(f"#{wid}", Window)
+            except Exception:
+                continue
+            win.styles.width = cw
+            win.styles.height = ch
 
     def _add_panel_windows(self, cwd: Path, *, visible: bool) -> None:
         assert self.desktop is not None
         left = make_window(
             FilePanel(cwd=cwd), title=str(cwd), position=(0, 0), size=(40, 12),
+            decorations=Decorations(close_box=True),
             id="panel-left",
         )
         right = make_window(
             FilePanel(cwd=cwd), title=str(cwd), position=(40, 0), size=(40, 12),
+            decorations=Decorations(close_box=True),
             id="panel-right",
         )
+        # Closing a panel (close box or Left/Right > Hide) hides it instead of
+        # destroying it — panels are looked up by id elsewhere and must persist.
+        left.hide_on_close = True
+        right.hide_on_close = True
         self.desktop.add_window(left)
         self.desktop.add_window(right)
         if not visible:
@@ -755,24 +1048,49 @@ class TyuiApp(App):
         assert self.desktop is not None and self.manager is not None
         if self.launch_mode != "fm":
             return
-        # Tile the two PanelWindows side by side, filling the full
-        # Desktop area. The Desktop already accounts for MenuBar +
-        # CommandLine + StatusBar via its margin CSS, so 100% of its
-        # height/width is what the panels should occupy.
-        W, H = self.desktop.size
+        self._tile_panels()
+
+    def _tile_panels(self) -> None:
+        """Tile the two PanelWindows side by side, filling the Desktop area.
+
+        Launch-mode-agnostic (``_apply_default_layout`` gates on fm mode; the
+        panel-reveal path in ``_focus_panel`` calls this directly so panels
+        come back at half-screen in editor/cli modes too).
+        """
+        assert self.desktop is not None
+        # The Desktop already accounts for MenuBar + CommandLine + StatusBar
+        # via its margin CSS, so 100% of its height/width is what the panels
+        # should occupy.
+        W, H = self.desktop.usable_size
         if W <= 0 or H <= 0:
             return
         half = max(3, W // 2)
+        # If the default console window is mounted (and not maximized),
+        # panels occupy the TOP portion and the console takes the BOTTOM.
+        console_h = 0
+        cwin = self._console_default_window
+        if cwin is not None and not cwin.maximized:
+            console_h = max(3, H // 2)
+        panels_h = max(3, H - console_h)
         for i, win_id in enumerate(("panel-left", "panel-right")):
             try:
                 w = self.desktop.query_one(f"#{win_id}", Window)
             except Exception:
                 continue
+            # A maximized panel fills the whole desktop; the Desktop's own
+            # resize handler keeps it filled. Re-tiling it to a half here would
+            # fight that (and the winner depends on event ordering), so skip it.
+            if w.maximized:
+                continue
             x = 0 if i == 0 else half
             width = half if i == 0 else (W - half)
             w.styles.offset = Offset(x, 0)
             w.styles.width = max(3, width)
-            w.styles.height = max(3, H)
+            w.styles.height = panels_h
+        # Refit any console windows so they don't run past the desktop edge.
+        for cw in self.desktop.windows:
+            if cw.id and cw.id.startswith("win-console-") and not cw.maximized:
+                self._fit_console_window(cw)
 
     def _refresh_panels(self) -> None:
         """Load directory contents into both panels (left and right)."""
@@ -812,18 +1130,103 @@ class TyuiApp(App):
             win = self.desktop.query_one(f"#{panel_id}", Window)
         except Exception:
             return
-        if isinstance(win.content, FilePanel):
-            self.desktop.focus_window(win)
-            self.set_focus(win.content)
+        if not isinstance(win.content, FilePanel):
+            return
+        # In editor/cli launch modes the panels are mounted hidden (and a panel
+        # may also be minimized). Reveal ONLY the requested panel, give it a
+        # sane half-screen geometry, and raise+focus it. ``show_window`` removes
+        # it from hidden/minimized, re-adds it to the visible stack, mounts it,
+        # and raises+focuses it (so it sits on top of the editor window).
+        if win not in self.desktop.windows:
+            self.desktop.show_window(win)
+            self._tile_panels()
+        self.desktop.focus_window(win)
+        self.set_focus(win.content)
+        self._last_focused_panel_window = win
+        # If this was invoked from a menu pick, keep the post-menu focus
+        # restoration on this panel — otherwise ``_on_menu_active_index_changed``
+        # raises the previously-active window (the editor) back on top, hiding
+        # the panel. Both menu-open paths recapture these on the next open, so
+        # setting them here is safe even outside a menu. Mirrors _select_window.
+        self._pre_menu_window = win
+        self._pre_menu_focus = None
+
+    def _toggle_panel(self, panel_id: str) -> None:
+        """Toggle a file panel's visibility (Alt+F1 left / Alt+F2 right).
+
+        Panels are looked up by id throughout the app, so a hidden panel is
+        kept (not destroyed) and simply re-shown. Mirrors the close box,
+        which hides the panel too.
+        """
+        if self.desktop is None:
+            return
+        try:
+            win = self.desktop.query_one(f"#{panel_id}", Window)
+        except Exception:
+            return
+        if win in self.desktop.windows:
+            self.desktop.hide_window(win)
+        else:
+            self._focus_panel(panel_id)
+
+    def _focus_command_line(self) -> None:
+        """Move Textual widget focus to the CommandLine input.
+
+        desktop.focused_window is left unchanged (still pointing at the
+        active panel window) so CommandDispatcher hotkey routing keeps
+        working when the user types F-keys while the cmdline is focused.
+
+        We use both Widget.focus() and App.set_focus() to cover both the
+        Textual-internal focus state and the screen-level focus chain.
+        The input is accessed via the stored ``_input`` attribute rather than
+        query_one so focus lands correctly even before the widget is fully
+        included in the query index.
+        """
+        if self.command_line is None:
+            return
+        inp = self.command_line._input
+        if inp is None or not inp.is_mounted:
+            return
+        self.set_focus(inp)
+        inp.focus()
+        # Place the cursor at the end of the current value (no selection)
+        # and force a cursor-blink "on" tick so it's visible immediately
+        # rather than waiting for the first blink cycle.
+        try:
+            inp.cursor_position = len(inp.value)
+        except Exception:
+            pass
+        try:
+            inp._cursor_visible = True  # private reactive in Textual.Input
+        except Exception:
+            pass
 
     def _active_panel(self):
-        """Return the currently focused FilePanel, or None."""
+        """Return the currently focused FilePanel, or None.
+
+        Resolution order:
+          1. Walk up from ``self.focused`` — works for direct keypresses.
+          2. ``desktop.focused_window.content`` — survives menu activation
+             (the menu bar steals widget focus, but the desktop's tracked
+             window is unaffected since dropdowns aren't windows).
+          3. ``_pre_menu_window.content`` — set when the menu was opened,
+             so commands invoked via menu items still target the panel
+             the user was on before pressing F9.
+          4. ``panel-left`` as a last-resort fallback.
+        """
         node = self.focused
         while node is not None:
             if isinstance(node, FilePanel):
                 return node
             node = getattr(node, "parent", None)
-        # Fallback: the left panel when nothing else is focused.
+        if self.desktop is not None:
+            win = self.desktop.focused_window
+            if win is not None and isinstance(win.content, FilePanel):
+                return win.content
+        if self._pre_menu_window is not None and isinstance(
+            self._pre_menu_window.content, FilePanel
+        ):
+            return self._pre_menu_window.content
         try:
             win = self.desktop.query_one("#panel-left", Window)
             if isinstance(win.content, FilePanel):
@@ -899,11 +1302,13 @@ class TyuiApp(App):
             return
         self._remember_active_panel_id()
         cwd = panel.cwd
-        dialog = InputDialog(
+        dialog = NewFileDialog(
             prompt=f"Create directory in {cwd}:",
             context=MkdirRequest(parent=cwd),
+            submit_label="Make",
+            title="Mkdir",
         )
-        show_modal(self.desktop, dialog, title="Mkdir", size=(50, 5))
+        show_modal(self.desktop, dialog, title="Mkdir", size=(60, 7))
         self.call_after_refresh(dialog.focus_input)
 
     def action_new(self) -> None:
@@ -920,6 +1325,150 @@ class TyuiApp(App):
         )
         show_modal(self.desktop, dialog, title="New", size=(60, 7))
         self.call_after_refresh(dialog.focus_input)
+
+    # --- Find file ---------------------------------------------------------
+
+    def action_find_file(self) -> None:
+        """Open the Far-style Find file dialog. Search starts when user
+        submits; results land in a non-modal SearchResultsContent window
+        spawned by ``_start_search``.
+        """
+        if self._has_active_modal():
+            return
+        panel = self._active_panel()
+        if panel is None or self.desktop is None:
+            return
+        self._remember_active_panel_id()
+        dialog = FindFileDialog(start_dir=panel.cwd)
+        show_modal(self.desktop, dialog, title="Find file", size=(72, 16))
+        self.call_after_refresh(dialog.focus_input)
+
+    def on_find_file_dialog_submitted(
+        self, event: FindFileDialog.Submitted
+    ) -> None:
+        dialog = event.dialog
+        start_dir = dialog.start_dir
+        self._close_modal(dialog)
+        self._start_search(event.options, start_dir)
+
+    def on_find_file_dialog_cancelled(
+        self, event: FindFileDialog.Cancelled
+    ) -> None:
+        self._close_modal(event.dialog)
+
+    def _start_search(self, options: FindOptions, start_dir: Path) -> None:
+        if self.desktop is None:
+            return
+        content = SearchResultsContent(options=options, start_dir=start_dir)
+        dw, dh = self.desktop.usable_size.width, self.desktop.usable_size.height
+        win = make_window(
+            content,
+            title=f"Find file: {' '.join(options.masks)}",
+            position=(0, 0),
+            size=(max(40, dw), max(10, dh)),
+            decorations=Decorations(close_box=True, zoom_box=True, minimize_box=True, resize_grip=True),
+            id="find_results",
+        )
+        win._saved_rect = (Offset(2, 1), Size(max(1, dw - 4), max(1, dh - 2)))
+        win.maximized = True
+        self.desktop.add_window(win)
+        self.call_after_refresh(content.focus)
+
+        def _worker() -> None:
+            def _on_progress(cur_dir: Path, files: int, folders: int) -> None:
+                self.call_from_thread(content.update_status, cur_dir, files, folders)
+
+            def _on_match(path: Path) -> None:
+                self.call_from_thread(content.add_match, path)
+
+            result = find_walk(
+                start_dir,
+                options,
+                on_progress=_on_progress,
+                on_match=_on_match,
+                cancel_event=content.cancel_event,
+            )
+            self.call_from_thread(content.finish, result)
+
+        self.run_worker(_worker, thread=True, exclusive=False, group="findfile")
+
+    # --- Search-results window plumbing ------------------------------------
+
+    def on_search_results_content_go_to_requested(
+        self, event: SearchResultsContent.GoToRequested
+    ) -> None:
+        target = event.path
+        panel = self._active_panel()
+        if panel is None or self.desktop is None:
+            return
+        parent = target.parent if target.is_file() else target
+        try:
+            panel._change_cwd(parent)
+        except OSError:
+            return
+        # _change_cwd left cursor at the parent row; move it onto the file.
+        for i, entry in enumerate(panel.entries):
+            if entry.path == target:
+                panel.cursor = i
+                break
+        panel.refresh()
+        self._close_results_window(event.content)
+
+    def on_search_results_content_view_requested(
+        self, event: SearchResultsContent.ViewRequested
+    ) -> None:
+        if event.path.is_file():
+            self._open_editor_window(event.path, read_only=True)
+
+    def on_search_results_content_edit_requested(
+        self, event: SearchResultsContent.EditRequested
+    ) -> None:
+        if event.path.is_file():
+            self._open_editor_window(event.path, read_only=False)
+
+    def on_search_results_content_stop_requested(
+        self, event: SearchResultsContent.StopRequested
+    ) -> None:
+        if self.desktop is None:
+            return
+        confirm = ConfirmDialog(
+            prompt="Operation has been interrupted.\nDo you really want to cancel it?",
+            context=CancelSearchRequest(content=event.content),
+        )
+        show_modal(self.desktop, confirm, title="Interrupt", size=(50, 6))
+
+    def on_search_results_content_close_requested(
+        self, event: SearchResultsContent.CloseRequested
+    ) -> None:
+        # If the search is still running, signal cancellation so the worker
+        # exits promptly instead of holding the thread until natural EOF.
+        if event.content.search_running:
+            event.content.cancel_event.set()
+        self._close_results_window(event.content)
+
+    def on_search_results_content_new_search_requested(
+        self, event: SearchResultsContent.NewSearchRequested
+    ) -> None:
+        # Cancel any in-flight worker, close the window, re-open the dialog.
+        if event.content.search_running:
+            event.content.cancel_event.set()
+        self._close_results_window(event.content)
+        self.action_find_file()
+
+    def _close_results_window(self, content: SearchResultsContent) -> None:
+        if self.desktop is None:
+            return
+        # Walk up to the enclosing Window — content is mounted inside one.
+        node = content
+        while node is not None:
+            parent = getattr(node, "parent", None)
+            if isinstance(parent, Window):
+                try:
+                    self.desktop.remove_window(parent)
+                except Exception:
+                    pass
+                return
+            node = parent
 
     def action_save_as(self, editor: EditorContent | None = None) -> None:
         if self._has_active_modal() or self.desktop is None:
@@ -947,11 +1496,42 @@ class TyuiApp(App):
         show_modal(self.desktop, dialog, title="Save As", size=(72, 7))
         self.call_after_refresh(dialog.focus_input)
 
+    def action_set_language(self, editor: "EditorContent") -> None:
+        if self.desktop is None:
+            return
+        if self._has_active_modal():
+            return
+        self._remember_active_panel_id()
+        show_language_picker(self.desktop, editor)
+
+    def on_language_picker_content_picked(self, message) -> None:
+        win = self._modal_window_for(message.picker)
+        if win is not None and self.desktop is not None:
+            self.desktop.remove_window(win)
+        if message.picker.editor is not None:
+            message.picker.editor._editor.set_language(message.language)
+            message.picker.editor._editor.focus()
+        message.stop()
+
+    def on_language_picker_content_dismissed(self, message) -> None:
+        win = self._modal_window_for(message.picker)
+        if win is not None and self.desktop is not None:
+            self.desktop.remove_window(win)
+        message.stop()
+
     def on_new_file_dialog_submitted(
         self, event: NewFileDialog.Submitted
     ) -> None:
         ctx = event.dialog.context
         self._close_modal(event.dialog)
+        if isinstance(ctx, MkdirRequest):
+            name = event.value.strip()
+            if not name:
+                return
+            result = mkdir_at(ctx.parent, name)
+            self._report_op_result("mkdir", result)
+            self._refresh_panels()
+            return
         if isinstance(ctx, NewFileRequest):
             name = event.value.strip()
             if not name:
@@ -1103,17 +1683,61 @@ class TyuiApp(App):
             return True
         return self._looks_binary(path)
 
+    def _make_editor_window(
+        self,
+        path: Path | None,
+        *,
+        position: tuple[int, int],
+        size: tuple[int, int],
+        win_id: str,
+        text: str | None = None,
+    ) -> Window:
+        """Build a focusable editor Window for `path` (None -> untitled).
+
+        Single source of truth for editor-window construction, shared by
+        `_open_editor_window` and the `we`-mode cascade. Does NOT add the
+        window to the desktop. If `text` is given, it is used as-is (the
+        caller already read the file); otherwise the file is read here.
+        """
+        if path is None:
+            text = "" if text is None else text
+            title = "untitled"
+            file_path = None
+        else:
+            if text is None:
+                try:
+                    text = path.read_text()
+                except OSError:
+                    text = ""
+            title = path.name
+            file_path = str(path)
+        content = _FocusableEditorContent(initial_text=text, file_path=file_path)
+        return make_window(
+            content,
+            title=title,
+            position=position,
+            size=size,
+            decorations=Decorations(
+                close_box=True, zoom_box=True, minimize_box=True, resize_grip=True
+            ),
+            id=win_id,
+        )
+
     def _open_editor_window(self, path: Path, *, read_only: bool = False) -> None:
         if self.desktop is None:
             return
         self._remember_active_panel_id()
+        # Each open assigns a unique id so multiple editor / viewer windows
+        # can coexist (including ones currently minimized in the IconTray).
+        self._editor_seq += 1
+        seq = self._editor_seq
         # F3 on a large or binary file → hex viewer with chunked mmap reads.
         # Skip the read_text() pre-load entirely so multi-GB files don't hang
         # the UI thread.
         if read_only and self._should_use_hex_viewer(path):
             content = HexViewerContent(path)
             title = f"Hex: {path.name}"
-            win_id = "hexviewer"
+            win_id = f"hexviewer-{seq}"
         else:
             # EditorContent.__init__ does NOT read the file — it only stores
             # file_path on the buffer for later save. We have to load the
@@ -1125,18 +1749,34 @@ class TyuiApp(App):
             if read_only:
                 content = ViewerContent(initial_text=text, file_path=str(path))
                 title = f"View: {path.name}"
-                win_id = "viewer"
+                win_id = f"viewer-{seq}"
             else:
-                content = _FocusableEditorContent(initial_text=text, file_path=str(path))
-                title = path.name
-                win_id = "editor"
-        dw, dh = self.desktop.size.width, self.desktop.size.height
+                # Editable editor: delegate entirely to the shared helper so
+                # _make_editor_window is the single source of truth.
+                dw, dh = self.desktop.usable_size.width, self.desktop.usable_size.height
+                win = self._make_editor_window(
+                    path,
+                    position=(0, 0),
+                    size=(dw, dh),
+                    win_id=f"editor-{seq}",
+                    text=text,
+                )
+                win._saved_rect = (
+                    Offset(2, 1), Size(max(1, dw - 4), max(1, dh - 2))
+                )
+                win.maximized = True
+                self.desktop.add_window(win)
+                if self._pre_menu_focus is not None or self._pre_menu_window is not None:
+                    self._pre_menu_window = win
+                    self._pre_menu_focus = None
+                return
+        dw, dh = self.desktop.usable_size.width, self.desktop.usable_size.height
         win = make_window(
             content,
             title=title,
             position=(0, 0),
             size=(dw, dh),
-            decorations=Decorations(close_box=True, zoom_box=True, resize_grip=True),
+            decorations=Decorations(close_box=True, zoom_box=True, minimize_box=True, resize_grip=True),
             id=win_id,
         )
         # Born maximized: pre-seed the restore rect so F5 / [↕] toggles back
@@ -1144,6 +1784,13 @@ class TyuiApp(App):
         win._saved_rect = (Offset(2, 1), Size(max(1, dw - 4), max(1, dh - 2)))
         win.maximized = True
         self.desktop.add_window(win)
+        # If the action was kicked off from the menu (File → View / Edit),
+        # the post-menu restore in `_on_menu_active_index_changed` would
+        # otherwise raise the original FilePanel back on top of the new
+        # editor. Redirect the restore target to the editor we just made.
+        if self._pre_menu_focus is not None or self._pre_menu_window is not None:
+            self._pre_menu_window = win
+            self._pre_menu_focus = None
 
     def on_file_panel_item_activated(
         self, event: FilePanel.ItemActivated
@@ -1156,14 +1803,24 @@ class TyuiApp(App):
         self._open_editor_window(event.entry.path)
 
     def action_close_editor(self) -> None:
-        """Esc closes the topmost editor window if one is open.
+        """Esc handler — multiple roles in order of precedence:
 
-        Gated by `_has_active_modal()` so Esc still routes to dialog
-        cancel handlers when a modal is up. If no editor is open this
-        is a silent no-op (panels and other widgets handle their own
-        Esc bindings before this app-level fallback runs).
+        1. No-op while a modal is up (dialog owns Esc).
+        2. When Textual focus is on the CommandLine input, move focus to
+           the active panel so the user can immediately use F-keys /
+           cursor without clicking.
+        3. Close the topmost editor/hex-viewer window if one is open.
+        4. Silent no-op otherwise.
         """
         if self.desktop is None or self._has_active_modal():
+            return
+        # Esc from CommandLine → return to active panel.
+        if self._focused_on_command_line(self.focused):
+            win = self._last_focused_panel_window
+            if win is not None and win.id in ("panel-left", "panel-right"):
+                self._focus_panel(win.id)
+            else:
+                self._focus_panel("panel-left")
             return
         for win in reversed(list(self.desktop.windows)):
             if isinstance(win.content, (EditorContent, HexViewerContent)):
@@ -1184,6 +1841,13 @@ class TyuiApp(App):
         self.manager.toggle_maximize(event.window)
         event.stop()
 
+    def on_window_minimized(self, event) -> None:
+        # Posted by Window when the [_] minimize box is clicked.
+        if self.desktop is None:
+            return
+        self.desktop.minimize_window(event.window)
+        event.stop()
+
     def on_window_closed(self, event) -> None:
         """Editor window closed: refresh panels (file may have been saved),
         restore focus to the panel that opened the editor."""
@@ -1196,6 +1860,74 @@ class TyuiApp(App):
         if self.launch_mode == "fm":
             target = self._pre_modal_panel_id or "panel-left"
             self._focus_panel(target)
+
+    def action_chmod(self) -> None:
+        if self._has_active_modal():
+            return
+        panel = self._active_panel()
+        if panel is None or self.desktop is None:
+            return
+        targets = panel.effective_targets()
+        if not targets:
+            return
+        self._remember_active_panel_id()
+        if len(targets) == 1:
+            label = targets[0].name
+        else:
+            label = f"<{len(targets)} items>"
+        try:
+            st = targets[0].stat()
+            current_mode = st.st_mode & 0o7777
+            full_mode = st.st_mode
+        except OSError:
+            current_mode = 0o644
+            full_mode = 0o100644
+        owner_name = ""
+        group_name = ""
+        try:
+            import pwd  # local import: stdlib, only POSIX
+            owner_name = pwd.getpwuid(st.st_uid).pw_name
+        except (KeyError, OSError, ImportError, NameError):
+            pass
+        try:
+            import grp  # local import: stdlib, only POSIX
+            group_name = grp.getgrgid(st.st_gid).gr_name
+        except (KeyError, OSError, ImportError, NameError):
+            pass
+        dialog = ChangeAttributesDialog(
+            target_label=label,
+            current_mode=current_mode,
+            full_st_mode=full_mode,
+            owner_name=owner_name,
+            group_name=group_name,
+            context=ChangeAttributesRequest(targets=targets),
+        )
+        show_modal(self.desktop, dialog, title="Chmod command", size=(74, 18))
+        self.call_after_refresh(dialog.focus_input)
+
+    def on_change_attributes_dialog_submitted(
+        self, event: ChangeAttributesDialog.Submitted
+    ) -> None:
+        ctx = event.dialog.context
+        self._close_modal(event.dialog)
+        if not isinstance(ctx, ChangeAttributesRequest):
+            return
+        self._run_chmod(ctx, event.mode)
+
+    def on_change_attributes_dialog_cancelled(
+        self, event: ChangeAttributesDialog.Cancelled
+    ) -> None:
+        self._close_modal(event.dialog)
+
+    def _run_chmod(self, req: ChangeAttributesRequest, mode: int) -> None:
+        if self.desktop is None:
+            return
+        # chmod is essentially instantaneous per file; keep it on the UI
+        # thread so the call site stays simple. If a future caller passes
+        # thousands of targets we can switch to the run_worker pattern.
+        result = chmod_paths(req.targets, mode)
+        self._report_op_result("chmod", result)
+        self._refresh_panels()
 
     def action_delete(self) -> None:
         if self._has_active_modal():
@@ -1234,6 +1966,12 @@ class TyuiApp(App):
         if self.menu_bar is not None:
             self.menu_bar.refresh_for_focus()
             self._recompute_menu_bar()
+        # Keep _last_focused_panel_window in sync so F-key routing works
+        # when Textual widget focus is on the CommandLine input.
+        if message.current is not None and isinstance(
+            getattr(message.current, "content", None), FilePanel
+        ):
+            self._last_focused_panel_window = message.current
         message.stop()
 
     def on_menu_bar_open_requested(self, message: MenuBar.OpenRequested) -> None:
@@ -1308,6 +2046,41 @@ class TyuiApp(App):
         message.stop()
 
     def on_key(self, event) -> None:
+        # Tray-restore chord: Ctrl+W set _tray_chord_pending; the very next
+        # keypress consumes the chord. Digits 1..9 restore that icon; any
+        # other key cancels the chord without acting.
+        if self._tray_chord_pending:
+            self._tray_chord_pending = False
+            ch = getattr(event, "character", None)
+            if ch is not None and len(ch) == 1 and ch in "123456789":
+                self._restore_tray_at(int(ch) - 1)
+                event.stop()
+                return
+            # Fall through: cancel and let the key be handled normally.
+
+        # Far-style letter routing: typing a printable character while a file
+        # panel has focus moves focus to the command line and inserts the
+        # character there. Active quick-search (Ctrl+S) on the panel keeps
+        # its own keystrokes and pre-empts this path.
+        from tyui.fm.file_panel import FilePanel
+        focused = self.focused
+        if (
+            isinstance(focused, FilePanel)
+            and not getattr(focused, "_qs_active", False)
+            and self.command_line is not None
+        ):
+            ch = getattr(event, "character", None)
+            if ch is not None and len(ch) == 1 and ch.isprintable():
+                inp = self.command_line._input
+                inp.value = inp.value + ch
+                try:
+                    inp.cursor_position = len(inp.value)
+                except Exception:
+                    pass
+                self.set_focus(inp)
+                event.stop()
+                return
+
         # Route navigation keys to the open dropdown when one is up.
         dd = self._active_dropdown
         if dd is not None and dd.is_mounted and (
@@ -1400,6 +2173,16 @@ class TyuiApp(App):
 
     def action_focus_other_panel(self) -> None:
         if self._has_active_modal():
+            # Modal is up — Tab must cycle inside the dialog instead of
+            # switching panels. The app-level priority binding ate the
+            # key before the dialog could see it; forward to Textual's
+            # focus_next which walks the DOM-order chain. ModalWindow's
+            # _freeze_siblings stripped can_focus from sibling-window
+            # widgets, so focus stays inside the modal.
+            try:
+                self.screen.focus_next()
+            except Exception:
+                pass
             return
         focused = self.focused
         if self._focused_inside_search_panel(focused):
@@ -1407,6 +2190,16 @@ class TyuiApp(App):
                 self.screen.focus_next()
             except Exception:
                 pass
+            return
+        # If focus is on the CommandLine input, Tab moves to the active
+        # panel window rather than swapping panels.  This mirrors far's
+        # behaviour: Esc returns to cmdline, Tab goes to/from panels.
+        if self._focused_on_command_line(focused):
+            win = self._last_focused_panel_window
+            if win is not None and win.id in ("panel-left", "panel-right"):
+                self._focus_panel(win.id)
+            else:
+                self._focus_panel("panel-left")
             return
         target: str | None = None
         node = focused
@@ -1435,13 +2228,31 @@ class TyuiApp(App):
 
     def action_cycle_window(self) -> None:
         """Shift+Tab: focus the next visible desktop window in cycle order."""
-        if self._has_active_modal() or self.desktop is None:
+        if self._has_active_modal():
+            # Modal is up — Shift+Tab cycles backwards inside the dialog.
+            # See action_focus_other_panel for the rationale.
+            try:
+                self.screen.focus_previous()
+            except Exception:
+                pass
+            return
+        if self.desktop is None:
             return
         if self._focused_inside_search_panel(self.focused):
             try:
                 self.screen.focus_previous()
             except Exception:
                 pass
+            return
+        # If focus is on the CommandLine input, Shift+Tab moves to the
+        # active panel (mirrors Tab — both keys yield to the panel from
+        # the command line, far-style).
+        if self._focused_on_command_line(self.focused):
+            win = self._last_focused_panel_window
+            if win is not None and win.id in ("panel-left", "panel-right"):
+                self._focus_panel(win.id)
+            else:
+                self._focus_panel("panel-left")
             return
         self.desktop.cycle_focus(+1)
 
@@ -1455,6 +2266,17 @@ class TyuiApp(App):
             node = getattr(node, "parent", None)
         return False
 
+    def _focused_on_command_line(self, focused) -> bool:
+        """Return True when the focused widget is inside the CommandLine."""
+        if self.command_line is None:
+            return False
+        node = focused
+        while node is not None:
+            if node is self.command_line:
+                return True
+            node = getattr(node, "parent", None)
+        return False
+
     def action_focus_left_panel(self) -> None:
         if self._has_active_modal():
             return
@@ -1464,3 +2286,173 @@ class TyuiApp(App):
         if self._has_active_modal():
             return
         self._focus_panel("panel-right")
+
+    def action_focus_command_line(self) -> None:
+        if self._has_active_modal():
+            return
+        self._focus_command_line()
+
+    def _restore_tray_at(self, index: int) -> None:
+        if self._has_active_modal() or self.desktop is None:
+            return
+        items = self.desktop.minimized_windows
+        if 0 <= index < len(items):
+            self.desktop.restore_window(items[index])
+
+    def action_tray_chord_start(self) -> None:
+        """Begin the Ctrl+W tray-restore chord; next 1..9 restores Nth icon."""
+        if self._has_active_modal():
+            return
+        self._tray_chord_pending = True
+
+    # --- CommandLine message handlers -------------------------------------
+
+    def on_command_line_submitted(self, event: CommandLine.Submitted) -> None:
+        event.stop()
+        if self.command_runner is None:
+            return
+        self.command_runner.execute(event.text, anonymous=event.anonymous)
+
+    def on_command_line_cancel_requested(self, event: CommandLine.CancelRequested) -> None:
+        event.stop()
+        if self.command_runner is not None:
+            self.command_runner.cancel_current()
+
+    def on_command_line_eof_requested(self, event: CommandLine.EofRequested) -> None:
+        event.stop()
+        if self.command_runner is not None:
+            self.command_runner.send_eof()
+
+    def on_command_line_kill_requested(self, event: CommandLine.KillRequested) -> None:
+        event.stop()
+        if self.command_runner is not None:
+            self.command_runner.kill_current()
+
+    def _on_console_busy_changed(self, target_id: str, busy: bool) -> None:
+        """Hook from CommandRunner; update the cmdline hint to reflect that
+        the active console target is running an interactive child."""
+        if self.command_line is None:
+            return
+        # Only react to the target the cmdline is currently routing to.
+        active_id = (
+            "console-default"
+            if self.command_runner is None or self.command_runner._current_target is None
+            else f"console-{self.command_runner._current_target}"
+        )
+        if target_id != active_id:
+            return
+        self.command_line.set_busy(busy)
+
+    # --- Console helpers --------------------------------------------------
+
+    def _panel_cwd_for_test(self) -> Path:
+        """Return the active panel's CWD (live, not just the initial path)."""
+        panel = self._active_panel()
+        if panel is not None:
+            return panel.cwd
+        # Fall back to initial_path logic from _panel_cwd
+        if self.initial_path is not None:
+            return self.initial_path if self.initial_path.is_dir() else self.initial_path.parent
+        return Path.cwd()
+
+    def _active_panel_side(self) -> str:
+        """Return 'left' or 'right' based on the focused panel's window id."""
+        panel = self._active_panel()
+        if panel is None:
+            return "left"
+        node = panel.parent
+        while node is not None:
+            nid = getattr(node, "id", None)
+            if nid == "panel-right":
+                return "right"
+            if nid == "panel-left":
+                return "left"
+            node = getattr(node, "parent", None)
+        return "left"
+
+    def _panel_cd(self, path: Path) -> str | None:
+        """Change the active panel's CWD. Returns error string or None."""
+        if not path.exists():
+            return f"{path}: No such file or directory"
+        if not path.is_dir():
+            return f"{path}: Not a directory"
+        side = self._active_panel_side()
+        self.set_panel_cwd(side, path)
+        return None
+
+    def set_panel_cwd(self, side: str, path: Path) -> None:
+        """Change the CWD of the named panel ('left' or 'right')."""
+        panel_id = "panel-left" if side == "left" else "panel-right"
+        if self.desktop is None:
+            return
+        try:
+            win = self.desktop.query_one(f"#{panel_id}", Window)
+        except Exception:
+            return
+        panel = win.content
+        if isinstance(panel, FilePanel):
+            panel._change_cwd(path)
+
+    def _create_console_content(self, target_id: str) -> ConsoleContent:
+        content = ConsoleContent(window_id=target_id)
+        self._mount_console_window(content)
+        return content
+
+    def _mount_console_window(self, content: ConsoleContent) -> None:
+        if self.desktop is None:
+            return
+        w = make_window(
+            content,
+            title="",
+            position=(0, 0),
+            size=(40, 8),
+            border_focused=BorderStyle.NONE,
+            border_unfocused=BorderStyle.NONE,
+            id=f"win-{content.id}",
+        )
+        self.desktop.add_window(w)
+        if content.id == "console-default":
+            self._console_default_window = w
+        self._fit_console_window(w)
+
+    def _fit_console_window(self, w: Window) -> None:
+        """Place a console window to occupy the bottom half of the desktop."""
+        if self.desktop is None:
+            return
+        W, H = self.desktop.usable_size
+        if W <= 0 or H <= 0:
+            return
+        h = max(3, H // 2)
+        w.styles.offset = Offset(0, max(0, H - h))
+        w.styles.width = W
+        w.styles.height = h
+
+    def action_toggle_console(self) -> None:
+        """Ctrl+O: create/maximize the default console, or restore it."""
+        # Lazily create the console-default window if it doesn't exist yet.
+        self.console_registry.get_or_create(None)
+        win = self._console_default_window
+        if win is None or self.manager is None or self.desktop is None:
+            return
+        if win.maximized:
+            self.manager.toggle_maximize(win)
+            if self._pre_console_focus is not None:
+                try:
+                    self.desktop.focus_window(self._pre_console_focus)
+                except Exception:
+                    pass
+                self._pre_console_focus = None
+        else:
+            self._pre_console_focus = self.desktop.focused_window
+            self.manager.toggle_maximize(win)
+            try:
+                self.desktop.focus_window(win)
+            except Exception:
+                pass
+            self._focus_command_line()
+
+    def _on_command_submitted_for_test(self, text: str, *, anonymous: bool) -> None:
+        """Test entry point: execute a command as if typed into CommandLine."""
+        if self.command_runner is None:
+            return
+        self.command_runner.execute(text, anonymous=anonymous)

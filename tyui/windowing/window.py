@@ -43,6 +43,7 @@ Target = Literal[
     "title",
     "close_box",
     "zoom_box",
+    "minimize_box",
     "resize_grip",
     "border_top",
     "border_right",
@@ -91,6 +92,11 @@ class Window(Container):
 
     # --- lifecycle messages ---
     class Closed(Message):
+        def __init__(self, window: "Window") -> None:
+            self.window = window
+            super().__init__()
+
+    class Minimized(Message):
         def __init__(self, window: "Window") -> None:
             self.window = window
             super().__init__()
@@ -364,8 +370,16 @@ class Window(Container):
             # Close box at positions [1..3] if decoration is on and left side is on.
             if deco.close_box and sides.left and 1 <= x <= 3:
                 return "close_box"
-            if deco.zoom_box and sides.right and w - 4 <= x <= w - 2:
-                return "zoom_box"
+            if sides.right:
+                # Right-side decorations stacked from the right edge inward:
+                # zoom_box (rightmost), then minimize_box to its left.
+                right_start = w - 1
+                if deco.zoom_box and right_start - 3 <= x <= right_start - 1:
+                    return "zoom_box"
+                if deco.zoom_box:
+                    right_start -= 3
+                if deco.minimize_box and right_start - 3 <= x <= right_start - 1:
+                    return "minimize_box"
             # Title region: if cursor is within the title text columns, treat as title.
             title_text = self.title.text
             if title_text:
@@ -392,6 +406,20 @@ class Window(Container):
         screen = event.screen_offset
         local = Offset(screen.x - self.region.x, screen.y - self.region.y)
         target = self.hit_test(local)
+
+        # Modal gate: while a modal is up, swallow ALL window-frame mouse
+        # actions on non-modal siblings. Without this the user could still
+        # click close/zoom boxes, or drag-move/resize a panel underneath
+        # the dialog. Desktop.focus_window already redirects focus, but
+        # close_box / zoom_box / drag start their own message paths that
+        # bypass focus_window — so they have to be gated here too.
+        desktop = self._find_desktop()
+        if desktop is not None and desktop._has_modal():
+            from .helpers import ModalWindow
+            if not isinstance(self, ModalWindow):
+                event.stop()
+                return
+
         # All clicks request focus on the window.
         self.post_message(Window.FocusRequested(self))
 
@@ -402,6 +430,10 @@ class Window(Container):
         if target == "zoom_box":
             from .manager import ToggleMaximize
             self.post_message(ToggleMaximize(self))
+            event.stop()
+            return
+        if target == "minimize_box":
+            self.post_message(Window.Minimized(self))
             event.stop()
             return
 

@@ -275,6 +275,18 @@ class EditorContent(WindowContent):
                 handler=lambda: self.toggle_split("vertical"),
             ),
         ]
+        commands.append(
+            WindowCommand(
+                id="toggle_syntax", label="Syntax Highlight",
+                handler=self._toggle_syntax, hotkey="ctrl+h",
+            ),
+        )
+        commands.append(
+            WindowCommand(
+                id="set_language", label="Set Language...",
+                handler=self._set_language,
+            ),
+        )
         if self._enable_folding:
             commands.extend([
                 WindowCommand(id="fold_toggle", label="Fold Toggle", handler=self._fold_toggle, hotkey="f7"),
@@ -301,6 +313,17 @@ class EditorContent(WindowContent):
         # Delegate to the host app — modal dialogs need Desktop access.
         app = getattr(self, "app", None)
         action = getattr(app, "action_save_as", None)
+        if callable(action):
+            action(self)
+
+    def _toggle_syntax(self) -> None:
+        self._editor.set_highlight_enabled(not self._editor._highlight_enabled)
+
+    def _set_language(self) -> None:
+        # Delegate to the host app — modal dialogs need Desktop access.
+        # (The app-side handler is added in Task 7.)
+        app = getattr(self, "app", None)
+        action = getattr(app, "action_set_language", None)
         if callable(action):
             action(self)
 
