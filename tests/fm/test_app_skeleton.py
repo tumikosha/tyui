@@ -229,9 +229,8 @@ async def test_app_f9_then_esc_returns_focus_to_panel(tmp_path):
 @pytest.mark.asyncio
 async def test_app_panels_fill_full_desktop_width():
     """Two panels combined cover the full desktop width; each ~half wide.
-    Panels occupy the top half of the desktop (the bottom half belongs to
-    console-default, mounted eagerly), with the IconTray's bottom row
-    reserved."""
+    The console is no longer mounted at startup, so the panels fill the full
+    usable desktop height (excluding the IconTray's bottom row)."""
     from tyui.windowing import Desktop, Window
 
     app = TyuiApp(launch_mode="fm", initial_path="/tmp")
@@ -246,11 +245,10 @@ async def test_app_panels_fill_full_desktop_width():
         # Neither panel is the placeholder 40-wide.
         assert left.size.width > 40 or desktop.size.width <= 80
         assert right.size.width > 40 or desktop.size.width <= 80
-        # Panels span the top half of the usable desktop (excluding the
-        # IconTray's bottom row).
+        # With no console at startup, panels span the full usable height.
         usable = desktop.size.height - 1
-        assert left.size.height == usable - usable // 2
-        assert right.size.height == left.size.height
+        assert left.size.height == usable
+        assert right.size.height == usable
 
 
 @pytest.mark.asyncio
@@ -1254,6 +1252,28 @@ async def test_windows_menu_lists_open_windows(tmp_path):
         candidates[-1].handler()
         await pilot.pause()
         assert desktop.focused_window is visible[-1]
+
+
+@pytest.mark.asyncio
+async def test_view_mode_command_changes_active_panel_mode(tmp_path):
+    from tyui.fm.panel_view import PanelViewMode
+    from tyui.fm.file_panel import FilePanel
+    from tyui.windowing import Window
+    app = TyuiApp(launch_mode="fm", initial_path=str(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        left = app.desktop.query_one("#panel-left", Window).content
+        assert isinstance(left, FilePanel)
+        assert left.view_mode == PanelViewMode.FULL
+        app.dispatcher.dispatch("panel.left.view_brief")
+        await pilot.pause()
+        assert left.view_mode == PanelViewMode.BRIEF
+        app.dispatcher.dispatch("panel.left.view_detailed")
+        await pilot.pause()
+        assert left.view_mode == PanelViewMode.DETAILED
+        app.dispatcher.dispatch("panel.left.view_short")
+        await pilot.pause()
+        assert left.view_mode == PanelViewMode.SHORT
 
 
 @pytest.mark.asyncio

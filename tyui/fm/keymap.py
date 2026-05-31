@@ -18,7 +18,7 @@ class FKeyLabel:
 
 DEFAULT_FKEY_LABELS: tuple[FKeyLabel, ...] = (
     FKeyLabel("1",  "Help"),
-    FKeyLabel("2",  "UsrMnu"),
+    FKeyLabel("2",  "Prj Edit"),
     FKeyLabel("3",  "View"),
     FKeyLabel("4",  "Edit"),
     FKeyLabel("5",  "Copy"),
@@ -32,7 +32,7 @@ DEFAULT_FKEY_LABELS: tuple[FKeyLabel, ...] = (
 
 EDITOR_FKEY_LABELS: tuple[FKeyLabel, ...] = (
     FKeyLabel("1",  "Help"),
-    FKeyLabel("2",  "Save"),
+    FKeyLabel("2",  "Prj Edit"),
     FKeyLabel("3",  "SvAs"),
     FKeyLabel("4",  "Repl"),
     FKeyLabel("5",  "SplH"),

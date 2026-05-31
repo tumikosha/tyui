@@ -52,6 +52,9 @@ async def test_mouse_wheel_scrolls_buffer(tmp_path):
     async with app.run_test(size=(80, 30)) as pilot:
         await pilot.pause()
         await pilot.pause()
+        # The console is no longer mounted at startup; reveal it first.
+        app.action_toggle_console()
+        await pilot.pause()
         cc = app.query_one(ConsoleContent)
         for i in range(50):
             cc.append(f"line {i:02d}\n".encode())

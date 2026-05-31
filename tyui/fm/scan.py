@@ -49,6 +49,7 @@ def scan_dir(
                     is_dir=True,
                     is_symlink=parent.is_symlink(),
                     is_executable=False,
+                    mode=pst.st_mode,
                 ))
             except OSError:
                 # Parent unreadable — no parent row, just skip.
@@ -84,5 +85,6 @@ def scan_dir(
             is_dir=is_dir,
             is_symlink=is_symlink,
             is_executable=is_executable,
+            mode=st.st_mode,
         ))
     return entries

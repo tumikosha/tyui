@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-__all__ = ["FileEntry", "format_size", "format_mtime"]
+__all__ = ["FileEntry", "format_size", "format_mtime", "format_mtime_short"]
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,7 @@ class FileEntry:
     is_dir: bool
     is_symlink: bool
     is_executable: bool
+    mode: int = 0          # raw st_mode (from lstat); 0 for synthetic/unknown
 
     @property
     def is_parent(self) -> bool:
@@ -60,3 +61,12 @@ def format_mtime(mtime: float) -> str:
     a uniform format keeps the Date column visually aligned.
     """
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
+
+
+def format_mtime_short(mtime: float) -> str:
+    """Compact local-time string, fixed 11 chars: 'MM-DD HH:MM'.
+
+    Used by the Detailed view mode where the full 16-char date does not fit
+    alongside the attributes column in a half-screen panel.
+    """
+    return time.strftime("%m-%d %H:%M", time.localtime(mtime))

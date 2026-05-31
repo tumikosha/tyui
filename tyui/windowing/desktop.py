@@ -324,11 +324,12 @@ class Desktop(Container):
     def on_window_closed(self, message: Window.Closed) -> None:
         # A window flagged ``hide_on_close`` (e.g. the fm file panels, which
         # are looked up by id elsewhere) is hidden rather than destroyed.
+        # Note: message.stop() is intentionally omitted so the event bubbles
+        # to the app for post-close housekeeping (e.g. Project View teardown).
         if getattr(message.window, "hide_on_close", False):
             self.hide_window(message.window)
         else:
             self.remove_window(message.window)
-        message.stop()
 
     # --- background rendering ---------------------------------------------
 

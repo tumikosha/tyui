@@ -52,6 +52,7 @@ from tyui.fm.file_panel import FilePanel
 from tyui.fm.find_file import FindOptions, walk as find_walk
 from tyui.fm.find_results import SearchResultsContent
 from tyui.fm.keymap import DEFAULT_FKEY_LABELS, EDITOR_FKEY_LABELS
+from tyui.fm.panel_view import PanelViewMode
 from tyui.fm.sort import SortOrder
 from tyui.windowing import (
     BorderStyle,
@@ -79,6 +80,7 @@ from tyui.windowing import (
 from tyui.windowing.content import WindowContent
 from tyui.windowing.editor.language_picker import show_language_picker
 from tyui.fm.hex_viewer import HexViewerContent, HexViewerWidget
+from tyui.fm.key_probe import KeyProbeContent
 from tyui.fm.viewer import ViewerContent
 from tyui.windowing.editor import EditorContent
 
@@ -103,7 +105,22 @@ class _FocusableEditorContent(EditorContent):
         except Exception:
             return super().focus(scroll_visible)
         return self
-from tyui.windowing.helpers import ModalWindow
+
+    def get_commands(self):
+        commands = super().get_commands()
+        app = getattr(self, "app", None)
+        handler = getattr(app, "action_project_view", None)
+        if callable(handler):
+            commands.append(
+                WindowCommand(
+                    id="project_view", label="Project View",
+                    handler=handler, hotkey="f2",
+                )
+            )
+        return commands
+
+
+from tyui.windowing.helpers import ModalWindow  # noqa: E402
 
 
 # --- Dialog payload types --------------------------------------------------
@@ -298,6 +315,13 @@ class TyuiApp(App):
         self._pre_console_focus = None
         self._console_default_window = None
         self._editor_seq = 0
+        # Project View (F2): id of the panel currently acting as the 1/4 tree,
+        # or None when Project View is not active. Drives resize relayout and
+        # the editor-side entry point; cleared by _toggle_panel (the exit path).
+        self._project_tree_panel_id: str | None = None
+        # The tree panel's view mode before Project View narrowed it to SHORT,
+        # restored when Project View exits. None while not in Project View.
+        self._project_prev_view_mode: PanelViewMode | None = None
         # Ids of the editor windows created by the `we`-mode cascade, so the
         # deferred geometry callback only ever resizes THIS cascade's windows
         # (never a later F4-opened editor, never panels).
@@ -363,13 +387,9 @@ class TyuiApp(App):
         self._mount_initial_windows()
         self._refresh_panels()
         if self.launch_mode == "fm":
-            # Eagerly mount console-default so the layout is stable from
-            # the start — panels occupy the top half, console the bottom
-            # half. Without this, the first command would suddenly resize
-            # the panels.
-            self.console_registry.get_or_create(None)
-            # add_window focuses the new console window; restore active
-            # panel afterwards so F-key routing lands on panel-left.
+            # Start with only the panels + command line visible; the console
+            # is mounted lazily on the first command (or via Toggle console),
+            # so the bottom half stays clear until the user needs it.
             self._focus_panel("panel-left")
             # Default focus rule: with a file argument the user is in
             # "open this thing" mode and the cmdline is more useful as the
@@ -553,10 +573,31 @@ class TyuiApp(App):
         """
         if self.desktop is None or self.manager is None:
             return
+        if self._project_tree_panel_id is not None:
+            self._relayout_project_view()
+            return
         self._tile_panels()
         # we-mode cascade editor windows must keep filling the desktop too.
         if self._cascade_ids:
             self._apply_cascade_geometry()
+
+    def _relayout_project_view(self) -> None:
+        """Re-apply the 1/4 tree + 3/4 editor split after a terminal resize."""
+        tree_id = self._project_tree_panel_id
+        if tree_id is None:
+            return
+        try:
+            tree_win = self.desktop.query_one(f"#{tree_id}", Window)
+        except Exception:
+            return
+        editors = [
+            w for w in self.desktop.windows
+            if isinstance(w.content, EditorContent)
+        ]
+        if tree_win not in self.desktop.windows or not editors:
+            return
+        # Project View keeps exactly one visible editor; others are minimized.
+        self._layout_project_view(tree_win=tree_win, editor_win=editors[-1])
 
     # --- private helpers --------------------------------------------------
 
@@ -600,6 +641,14 @@ class TyuiApp(App):
                 handler=self.action_toggle_console,
                 hotkey="ctrl+o",
             ),
+            # Diagnostic: open the Key Probe window. No hotkey on purpose — the
+            # whole point is to diagnose keys (Ctrl+digit / Alt+letter) that do
+            # NOT reach the app, so it's reached via the Help menu / palette.
+            WindowCommand(
+                id="help.key_probe",
+                label="Key Probe",
+                handler=self.action_key_probe,
+            ),
         ]
         # Per-panel sort commands. Side-suffixed labels are what the command
         # palette shows; menu items override the label so the dropdown reads
@@ -616,12 +665,49 @@ class TyuiApp(App):
                     label=f"Sort by {label} ({side})",
                     handler=(lambda pid=panel_id, o=order: self._set_panel_sort(pid, o)),
                 ))
+        for side, panel_id in (("left", "panel-left"), ("right", "panel-right")):
+            for mode, label in (
+                (PanelViewMode.BRIEF, "Brief"),
+                (PanelViewMode.MEDIUM, "Medium"),
+                (PanelViewMode.SHORT, "Short"),
+                (PanelViewMode.FULL, "Full"),
+                (PanelViewMode.DETAILED, "Detailed"),
+                (PanelViewMode.DESCRIPTION, "Description"),
+            ):
+                cmds.append(WindowCommand(
+                    id=f"panel.{side}.view_{mode.value}",
+                    label=f"View: {label} ({side})",
+                    handler=(lambda pid=panel_id, m=mode: self._set_panel_view_mode(pid, m)),
+                ))
         self.command_registry.register_many(cmds)
 
     def action_open_palette(self) -> None:
         if self.dispatcher is None or self.desktop is None:
             return
         show_command_palette(self.desktop, self.dispatcher)
+
+    def action_key_probe(self) -> None:
+        """Open the diagnostic Key Probe window.
+
+        Reachable from Help > Key Probe (and the command palette). Mounts a
+        focusable KeyProbeContent so every keystroke that arrives is echoed,
+        letting users see exactly what Textual decodes on their terminal.
+        """
+        if self.desktop is None:
+            return
+        if self._has_active_modal():
+            return
+        content = KeyProbeContent()
+        win = make_window(
+            content,
+            title="Key Probe",
+            position=(4, 2),
+            size=(64, 18),
+            decorations=Decorations(close_box=True, zoom_box=True, resize_grip=True),
+            id="key-probe",
+        )
+        self.desktop.add_window(win)
+        self.call_after_refresh(content.focus)
 
     def action_open_file(self) -> None:
         if self.desktop is None:
@@ -676,6 +762,13 @@ class TyuiApp(App):
                 MenuItem(label="Sort by extension", command_id="panel.left.sort_ext"),
                 MenuItem(label="Sort by size",      command_id="panel.left.sort_size"),
                 MenuItem(label="Sort by date",      command_id="panel.left.sort_mtime"),
+                MenuSeparator(),
+                MenuItem(label="View: Brief",       command_id="panel.left.view_brief"),
+                MenuItem(label="View: Medium",      command_id="panel.left.view_medium"),
+                MenuItem(label="View: Short",       command_id="panel.left.view_short"),
+                MenuItem(label="View: Full",        command_id="panel.left.view_full"),
+                MenuItem(label="View: Detailed",    command_id="panel.left.view_detailed"),
+                MenuItem(label="View: Description", command_id="panel.left.view_description"),
             ]),
             Menu("File", [
                 MenuItem(command_id="app.open_file"),
@@ -705,6 +798,13 @@ class TyuiApp(App):
                 MenuItem(label="Sort by extension", command_id="panel.right.sort_ext"),
                 MenuItem(label="Sort by size",      command_id="panel.right.sort_size"),
                 MenuItem(label="Sort by date",      command_id="panel.right.sort_mtime"),
+                MenuSeparator(),
+                MenuItem(label="View: Brief",       command_id="panel.right.view_brief"),
+                MenuItem(label="View: Medium",      command_id="panel.right.view_medium"),
+                MenuItem(label="View: Short",       command_id="panel.right.view_short"),
+                MenuItem(label="View: Full",        command_id="panel.right.view_full"),
+                MenuItem(label="View: Detailed",    command_id="panel.right.view_detailed"),
+                MenuItem(label="View: Description", command_id="panel.right.view_description"),
             ]),
             Menu("Editor", [
                 MenuItem("Agent", hotkey="F12"),
@@ -725,6 +825,9 @@ class TyuiApp(App):
                 MenuSeparator(),
                 MenuItem(command_id="toggle_syntax"),
                 MenuItem(command_id="set_language"),
+            ]),
+            Menu("Help", [
+                MenuItem(command_id="help.key_probe"),
             ]),
             # Items are rebuilt on every menu activation by
             # ``_refresh_windows_menu``; the empty list here is a placeholder.
@@ -758,10 +861,11 @@ class TyuiApp(App):
         self._refresh_status_bar()
 
     def _panel_status_items(self) -> list[StatusItem]:
-        # F-keys that drive file-panel actions. F1 (Help) and F2 (UsrMnu) are
-        # not implemented yet — leaving their handler at None makes the
-        # status bar ignore clicks on those cells.
+        # F-keys that drive file-panel actions. F1 (Help) is not implemented
+        # yet — leaving its handler at None makes the status bar ignore clicks
+        # on that cell. F2 ("Prj Edit") opens Project View.
         handlers: dict[str, Callable[[], None]] = {
+            "2":  self.action_project_view,
             "3":  self.action_view,
             "4":  self.action_edit,
             "5":  self.action_copy,
@@ -787,7 +891,7 @@ class TyuiApp(App):
             return _run
 
         handlers: dict[str, Callable[[], None]] = {
-            "2":  _dispatch("save"),
+            "2":  _dispatch("project_view"),
             "3":  _dispatch("save_as"),
             "4":  _dispatch("replace"),
             "5":  _dispatch("split_h"),
@@ -1048,6 +1152,9 @@ class TyuiApp(App):
         assert self.desktop is not None and self.manager is not None
         if self.launch_mode != "fm":
             return
+        if self._project_tree_panel_id is not None:
+            self._relayout_project_view()
+            return
         self._tile_panels()
 
     def _tile_panels(self) -> None:
@@ -1092,6 +1199,32 @@ class TyuiApp(App):
             if cw.id and cw.id.startswith("win-console-") and not cw.maximized:
                 self._fit_console_window(cw)
 
+    def _layout_project_view(self, tree_win: Window, editor_win: Window) -> None:
+        """Dock `tree_win` as a 1/4-width tree on its own side, `editor_win` 3/4.
+
+        The tree keeps the side its id implies: ``panel-right`` docks right (with
+        the editor on the left), every other id docks left. Both windows fill the
+        full usable height.
+        """
+        assert self.desktop is not None
+        W, H = self.desktop.usable_size
+        if W <= 0 or H <= 0:
+            return
+        tree_w = max(8, W // 4)
+        editor_w = max(3, W - tree_w)
+        if tree_win.id == "panel-right":
+            editor_x, tree_x = 0, W - tree_w
+        else:
+            tree_x, editor_x = 0, tree_w
+        for win, x, width in (
+            (tree_win, tree_x, tree_w),
+            (editor_win, editor_x, editor_w),
+        ):
+            win.maximized = False
+            win.styles.offset = Offset(x, 0)
+            win.styles.width = width
+            win.styles.height = H
+
     def _refresh_panels(self) -> None:
         """Load directory contents into both panels (left and right)."""
         from tyui.fm.file_panel import FilePanel  # local: avoid circular at import-time
@@ -1122,6 +1255,20 @@ class TyuiApp(App):
             panel.set_sort_order(order, descending=not panel.sort_descending)
         else:
             panel.set_sort_order(order)
+        panel.refresh()
+
+    def _set_panel_view_mode(self, panel_id: str, mode: PanelViewMode) -> None:
+        if self.desktop is None:
+            return
+        try:
+            win = self.desktop.query_one(f"#{panel_id}", Window)
+        except Exception:
+            return
+        panel = win.content
+        if not isinstance(panel, FilePanel):
+            return
+        panel.view_mode = mode
+        panel._ensure_cursor_visible()
         panel.refresh()
 
     def _focus_panel(self, panel_id: str) -> None:
@@ -1160,6 +1307,9 @@ class TyuiApp(App):
         """
         if self.desktop is None:
             return
+        # Toggling a panel is the Project View exit path.
+        self._restore_tree_view_mode()
+        self._project_tree_panel_id = None
         try:
             win = self.desktop.query_one(f"#{panel_id}", Window)
         except Exception:
@@ -1723,6 +1873,140 @@ class TyuiApp(App):
             id=win_id,
         )
 
+    def _window_of(self, content) -> Window | None:
+        """Walk up from a WindowContent to its enclosing Window (or None)."""
+        node = getattr(content, "parent", None)
+        while node is not None and not isinstance(node, Window):
+            node = getattr(node, "parent", None)
+        return node
+
+    def action_project_view(self) -> None:
+        """F2: enter Project View. Branches on whether an editor or panel is focused."""
+        if self._has_active_modal():
+            return
+        if self.desktop is None:
+            return
+        if self._is_editor_focused():
+            self._project_view_from_editor()
+            return
+        panel = self._active_panel()
+        if panel is not None:
+            # Only enter Project View when the resolved panel's window is
+            # actually visible — _active_panel() has a panel-left last-resort
+            # fallback that fires even when focus is on the command line or
+            # another widget, which would silently enter Project View against a
+            # panel the user isn't looking at.
+            panel_win = self._window_of(panel)
+            if panel_win is None or panel_win not in self.desktop.windows:
+                return
+            self._project_view_from_panel(panel)
+
+    def _project_view_from_panel(self, panel) -> None:
+        from tyui.fm.file_panel import FilePanel
+        if not isinstance(panel, FilePanel):
+            return
+        tree_win = self._window_of(panel)
+        if tree_win is None or tree_win.id not in ("panel-left", "panel-right"):
+            return
+        if not (0 <= panel.cursor < len(panel.entries)):
+            return
+        entry = panel.entries[panel.cursor]
+        if entry.is_dir:
+            return  # F2 on a directory is a no-op, mirroring F4.
+        tree_id = tree_win.id
+        other_id = "panel-right" if tree_id == "panel-left" else "panel-left"
+        # Hide the opposite panel.
+        try:
+            other = self.desktop.query_one(f"#{other_id}", Window)
+            if other in self.desktop.windows:
+                self.desktop.hide_window(other)
+        except Exception:
+            pass
+        # Minimize any currently-open editor windows to the IconTray.
+        for w in list(self.desktop.windows):
+            if isinstance(w.content, EditorContent):
+                self.desktop.minimize_window(w)
+        # Build a fresh, NON-maximized editor for the selected file.
+        self._editor_seq += 1
+        try:
+            text = entry.path.read_text()
+        except OSError:
+            text = ""
+        W, H = self.desktop.usable_size
+        editor_win = self._make_editor_window(
+            entry.path,
+            position=(0, 0),
+            size=(max(3, W), max(3, H)),
+            win_id=f"editor-{self._editor_seq}",
+            text=text,
+        )
+        self.desktop.add_window(editor_win)
+        self._project_tree_panel_id = tree_id
+        self._enter_tree_short_mode(panel)
+        self._layout_project_view(tree_win=tree_win, editor_win=editor_win)
+        self.desktop.focus_window(editor_win)
+
+    def _enter_tree_short_mode(self, panel) -> None:
+        """Narrow the project tree to Short view, remembering the old mode.
+
+        The tree only gets 1/4 of the width, so a multi-column or wide listing
+        is unusable there; Short (Name + Size, single column) fits. The prior
+        mode is restored by _restore_tree_view_mode when Project View exits.
+        """
+        from tyui.fm.file_panel import FilePanel
+        if not isinstance(panel, FilePanel):
+            return
+        if panel.view_mode is not PanelViewMode.SHORT:
+            self._project_prev_view_mode = panel.view_mode
+        panel.view_mode = PanelViewMode.SHORT
+        panel._ensure_cursor_visible()
+        panel.refresh()
+
+    def _restore_tree_view_mode(self) -> None:
+        """Restore the tree panel's pre-Project-View mode, if one was saved."""
+        if self.desktop is None or self._project_prev_view_mode is None:
+            return
+        prev = self._project_prev_view_mode
+        self._project_prev_view_mode = None
+        tree_id = self._project_tree_panel_id or "panel-left"
+        try:
+            win = self.desktop.query_one(f"#{tree_id}", Window)
+        except Exception:
+            return
+        panel = win.content
+        from tyui.fm.file_panel import FilePanel
+        if not isinstance(panel, FilePanel):
+            return
+        panel.view_mode = prev
+        panel._ensure_cursor_visible()
+        panel.refresh()
+
+    def _project_view_from_editor(self) -> None:
+        from tyui.fm.file_panel import FilePanel
+        editor_win = self.desktop.focused_window
+        if editor_win is None or not isinstance(editor_win.content, EditorContent):
+            return
+        tree_id = self._project_tree_panel_id or "panel-left"
+        other_id = "panel-right" if tree_id == "panel-left" else "panel-left"
+        try:
+            tree_win = self.desktop.query_one(f"#{tree_id}", Window)
+        except Exception:
+            return
+        if not isinstance(tree_win.content, FilePanel):
+            return
+        if tree_win not in self.desktop.windows:
+            self.desktop.show_window(tree_win)
+        try:
+            other = self.desktop.query_one(f"#{other_id}", Window)
+            if other in self.desktop.windows:
+                self.desktop.hide_window(other)
+        except Exception:
+            pass
+        self._project_tree_panel_id = tree_id
+        self._enter_tree_short_mode(tree_win.content)
+        self._layout_project_view(tree_win=tree_win, editor_win=editor_win)
+        self.desktop.focus_window(editor_win)
+
     def _open_editor_window(self, path: Path, *, read_only: bool = False) -> None:
         if self.desktop is None:
             return
@@ -1860,6 +2144,22 @@ class TyuiApp(App):
         if self.launch_mode == "fm":
             target = self._pre_modal_panel_id or "panel-left"
             self._focus_panel(target)
+        # Project View exit: if the last visible editor just closed, clear state
+        # and restore the normal two-panel split.  The closed window has already
+        # been removed from desktop.windows by the framework at this point.
+        if self._project_tree_panel_id is not None and not [
+            w for w in self.desktop.windows if isinstance(w.content, EditorContent)
+        ]:
+            self._restore_tree_view_mode()
+            self._project_tree_panel_id = None
+            for pid in ("panel-left", "panel-right"):
+                try:
+                    pw = self.desktop.query_one(f"#{pid}", Window)
+                except Exception:
+                    continue
+                if pw not in self.desktop.windows:
+                    self.desktop.show_window(pw)
+            self._tile_panels()
 
     def action_chmod(self) -> None:
         if self._has_active_modal():

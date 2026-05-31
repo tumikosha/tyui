@@ -66,7 +66,7 @@ def test_panel_page_size_uses_widget_height_minus_header(tmp_path: Path):
         (tmp_path / f"f{i:02d}.txt").write_text("")
     p = FilePanel(cwd=tmp_path)
     p.refresh_listing()
-    p._panel_size = (40, 11)  # widget size; header consumes 1 row -> 10 visible
+    p._panel_size = (40, 12)  # header + footer consume 2 rows -> 10 visible
     p.home()
     p.page_down()
     assert p.cursor == 10  # one page == 10 entries
@@ -79,7 +79,7 @@ def test_panel_scroll_follows_cursor(tmp_path: Path):
         (tmp_path / f"f{i:02d}.txt").write_text("")
     p = FilePanel(cwd=tmp_path)
     p.refresh_listing()
-    p._panel_size = (40, 11)
+    p._panel_size = (40, 12)
     p.home()
     p.move_cursor(+15)
     # Cursor at index 15, only 10 visible rows -> scroll_offset should
@@ -204,7 +204,7 @@ def test_panel_refresh_drops_selection_for_vanished_entries(tmp_path: Path):
     assert f not in p.selection
 
 
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult  # noqa: E402
 
 
 class _FmHarness(App):
@@ -315,8 +315,6 @@ async def test_panel_toggle_selection_emits_message(tmp_path: Path):
         await pilot.pause()
         assert harness.selection_changed == 1
 
-
-import re
 
 
 def _strip_to_text(strip) -> str:
@@ -490,7 +488,7 @@ async def test_panel_keybinding_home_end_pgup_pgdn(tmp_path: Path):
         (tmp_path / f"f{i:02d}.txt").write_text("")
     p = FilePanel(cwd=tmp_path)
     p.refresh_listing()
-    p._panel_size = (40, 11)  # 10 visible rows
+    p._panel_size = (40, 12)  # header + footer consume 2 rows -> 10 visible
     async with _FmHarness(p).run_test() as pilot:
         p.focus()
         await pilot.press("end")
@@ -626,3 +624,206 @@ async def test_panel_shift_arrow_unselects_when_already_selected(tmp_path: Path)
         await pilot.pause()
         assert tmp_path / "a.txt" not in p.selection
         assert tmp_path / "b.txt" in p.selection
+
+
+def test_scan_populates_mode(tmp_path: Path):
+    from tyui.fm.scan import scan_dir
+    (tmp_path / "f.txt").write_text("x")
+    entries = scan_dir(tmp_path, include_parent=False)
+    f = next(e for e in entries if e.name == "f.txt")
+    assert f.mode != 0          # raw st_mode came through
+    assert f.mode & 0o170000    # has a file-type bits component
+
+
+def test_format_mtime_short_is_11_chars():
+    from tyui.fm.file_entry import format_mtime_short
+    import time
+    s = format_mtime_short(time.time())
+    assert len(s) == 11         # "MM-DD HH:MM"
+    assert s[2] == "-" and s[5] == " " and s[8] == ":"
+
+
+def test_panel_default_view_mode_is_full(tmp_path: Path):
+    from tyui.fm.panel_view import PanelViewMode
+    p = FilePanel(cwd=tmp_path)
+    assert p.view_mode == PanelViewMode.FULL
+
+
+def test_visible_rows_reserves_header_and_footer(tmp_path: Path):
+    _make_tree(tmp_path)
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (40, 12)        # 12 - header - footer = 10
+    assert p._visible_rows() == 10
+    p._qs_active = True             # qs bar reserves one more
+    assert p._visible_rows() == 9
+
+
+def test_multicolumn_cursor_scrolls_by_column(tmp_path: Path):
+    from tyui.fm.panel_view import PanelViewMode
+    for i in range(40):
+        (tmp_path / f"f{i:02d}.txt").write_text("")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (40, 12)        # 10 visible rows, BRIEF -> 2 cols = 20/page
+    p.view_mode = PanelViewMode.BRIEF
+    p.home()
+    # Jump the cursor past the first 20-entry page; offset advances by a
+    # whole column (10) at a time and stays a multiple of 10.
+    p.cursor = 25
+    p._ensure_cursor_visible()
+    assert p.row_offset % 10 == 0
+    assert p.row_offset <= 25 < p.row_offset + 20
+
+
+def test_multicolumn_snaps_unaligned_row_offset(tmp_path: Path):
+    from tyui.fm.panel_view import PanelViewMode
+    for i in range(40):
+        (tmp_path / f"f{i:02d}.txt").write_text("")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (40, 12)        # rows = 10
+    p.view_mode = PanelViewMode.BRIEF
+    p.row_offset = 5                # simulate leftover from a single-column mode
+    p.cursor = 7
+    p._ensure_cursor_visible()
+    assert p.row_offset % 10 == 0   # snapped to a column boundary
+
+
+def test_multicol_click_index_clamps_to_last_column(tmp_path: Path):
+    from tyui.fm.panel_view import PanelViewMode
+    for i in range(30):
+        (tmp_path / f"f{i:02d}.txt").write_text("")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (82, 12)              # rows = 10
+    p.view_mode = PanelViewMode.MEDIUM   # k = 3
+    # width 82, k=3 -> col_w = (82-2)//3 = 26; col stride = 27.
+    # x=81 sits in the right-edge pad; raw 81//27 == 3 (out of range) -> must clamp to 2.
+    idx = p._multicol_index_at(81, 1, 82)
+    rows = p._visible_rows()
+    # clamped col 2 on visual row 0:
+    assert idx == p.row_offset + 2 * rows + 0
+    # and never the unclamped col-3 value:
+    assert idx != p.row_offset + 3 * rows + 0
+
+
+@pytest.mark.asyncio
+async def test_footer_shows_full_cursor_name(tmp_path: Path):
+    long = "a_very_long_file_name_that_truncates.txt"
+    (tmp_path / long).write_text("")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (24, 12)            # footer lands at render_line(11)
+    async with _FmHarness(p).run_test() as pilot:
+        await pilot.pause()
+        p.cursor = next(i for i, e in enumerate(p.entries) if e.name == long)
+        footer = _strip_to_text(p.render_line(11))
+        assert long in footer          # full, untruncated, even though body clips it
+
+
+@pytest.mark.asyncio
+async def test_detailed_mode_row_shows_attrs(tmp_path: Path):
+    from tyui.fm.panel_view import PanelViewMode
+    (tmp_path / "f.txt").write_text("x")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (50, 12)
+    p.view_mode = PanelViewMode.DETAILED
+    async with _FmHarness(p).run_test() as pilot:
+        await pilot.pause()
+        rows = [_strip_to_text(p.render_line(y)) for y in range(1, 11)]
+        assert any("-rw" in r or "rw-" in r for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_brief_mode_packs_two_columns(tmp_path: Path):
+    from tyui.fm.panel_view import PanelViewMode
+    for i in range(6):
+        (tmp_path / f"f{i}.txt").write_text("")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (40, 5)            # reserved 2 -> rows = 3 visible
+    p.view_mode = PanelViewMode.BRIEF
+    async with _FmHarness(p).run_test() as pilot:
+        await pilot.pause()
+        rows = p._visible_rows()       # 3
+        row1 = _strip_to_text(p.render_line(1))   # visual row 0
+        # Column-major: visual row 0 shows entries[0] (col 0) and entries[rows] (col 1).
+        assert p.entries[0].name in row1
+        assert p.entries[rows].name in row1
+
+
+@pytest.mark.asyncio
+async def test_brief_and_medium_differ_for_short_listing(tmp_path: Path):
+    # Regression: with the column height fixed at the full panel height, a
+    # short listing stacked entirely in column 0 and Brief (2 cols) / Medium
+    # (3 cols) rendered identically. The column height must collapse to
+    # ceil(n / k) so the extra columns are actually used.
+    from tyui.fm.panel_view import PanelViewMode
+    for n in ("alpha", "beta", "gamma", "delta"):
+        (tmp_path / f"{n}.txt").write_text("")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (40, 24)           # tall panel: visible_rows = 22
+    async with _FmHarness(p).run_test(size=(40, 24)) as pilot:
+        await pilot.pause()
+        p.view_mode = PanelViewMode.BRIEF
+        brief_row1 = _strip_to_text(p.render_line(1))
+        p.view_mode = PanelViewMode.MEDIUM
+        medium_row1 = _strip_to_text(p.render_line(1))
+        assert brief_row1 != medium_row1
+        assert len(brief_row1.split()) >= 2     # 5 entries, k=2 -> 2 columns
+        assert len(medium_row1.split()) >= 3    # 5 entries, k=3 -> 3 columns
+
+
+@pytest.mark.asyncio
+async def test_multicol_no_duplicate_rows_below_column_height(tmp_path: Path):
+    # Regression: rows below the (collapsed) column height must not re-render
+    # the next column's entries. They still carry the column separators (which
+    # run to the bottom of the panel), so the row is spaces + separators only.
+    from tyui.fm.panel_view import COL_SEP, PanelViewMode
+    for n in ("alpha", "beta", "gamma", "delta"):
+        (tmp_path / f"{n}.txt").write_text("")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (40, 24)
+    p.view_mode = PanelViewMode.BRIEF
+    async with _FmHarness(p).run_test(size=(40, 24)) as pilot:
+        await pilot.pause()
+        col_h = p._multicol_col_height()        # ceil(5 / 2) = 3
+        below = _strip_to_text(p.render_line(1 + col_h))  # first row past the column
+        assert set(below) <= {" ", COL_SEP}     # no entry text, separators only
+        assert COL_SEP in below                  # separator runs to the bottom
+
+
+@pytest.mark.asyncio
+async def test_multicol_columns_separated_by_vertical_bar(tmp_path: Path):
+    from tyui.fm.panel_view import COL_SEP, PanelViewMode
+    for n in ("alpha", "beta", "gamma", "delta"):
+        (tmp_path / f"{n}.txt").write_text("")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (40, 24)
+    p.view_mode = PanelViewMode.BRIEF
+    async with _FmHarness(p).run_test(size=(40, 24)) as pilot:
+        await pilot.pause()
+        row1 = _strip_to_text(p.render_line(1))   # a row with two populated columns
+        assert COL_SEP in row1
+
+
+@pytest.mark.asyncio
+async def test_header_labels_are_centered(tmp_path: Path):
+    from tyui.fm.panel_view import PanelViewMode, name_col_width
+    (tmp_path / "f.txt").write_text("x")
+    p = FilePanel(cwd=tmp_path)
+    p.refresh_listing()
+    p._panel_size = (40, 10)
+    p.view_mode = PanelViewMode.SHORT
+    async with _FmHarness(p).run_test(size=(40, 10)) as pilot:
+        await pilot.pause()
+        header = _strip_to_text(p.render_line(0))
+        ncol = name_col_width(PanelViewMode.SHORT, p.size.width)
+        name_cell = header[:ncol]
+        assert name_cell.strip() == "Name"
+        assert name_cell == "Name".center(ncol)   # centred, not left/right aligned

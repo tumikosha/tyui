@@ -18,7 +18,15 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.strip import Strip
 
-from tyui.fm.file_entry import FileEntry, format_mtime, format_size
+from tyui.fm.file_entry import FileEntry
+from tyui.fm.panel_view import (
+    COL_SEP,
+    PanelViewMode,
+    column_count,
+    column_width,
+    empty_row_text,
+    is_multicolumn,
+)
 from tyui.fm.scan import scan_dir
 from tyui.fm.sort import SortOrder, default_descending, sort_entries
 from tyui.windowing.content import WindowCommand, WindowContent
@@ -93,6 +101,7 @@ class FilePanel(WindowContent):
         self.sort_order: SortOrder = SortOrder.NAME
         self.sort_descending: bool = default_descending(SortOrder.NAME)
         self.show_hidden: bool = False
+        self.view_mode: PanelViewMode = PanelViewMode.FULL
         self.selection: set[Path] = set()
         # Stash the cwd into the reactive backing field so consumers reading
         # window_title before mount (e.g. Phase-1 stub test) see something
@@ -286,25 +295,57 @@ class FilePanel(WindowContent):
     # ------------------------------------------------------------------
 
     def _visible_rows(self) -> int:
-        """Number of entry rows currently visible (excluding the header).
+        """Number of entry rows visible (excluding header and footer).
 
-        When quick-search is active the bottom row is reserved for the
-        search bar, so one fewer entry is shown.
+        Row 0 is the header; the last row is the footer (full-name line).
+        When quick-search is active one more row is reserved for its bar.
         """
         if self._panel_size is not None:
             _, h = self._panel_size
         else:
             h = self.size.height
-        reserved = 1 + (1 if self._qs_active else 0)
+        reserved = 2 + (1 if self._qs_active else 0)
         return max(1, h - reserved)
 
+    def _multicol_col_height(self) -> int:
+        """Rows per column for the Brief/Medium multi-column layout.
+
+        Columns fill top-to-bottom. The height is the smaller of the available
+        rows and ceil(n / k), so the extra columns are actually used as soon as
+        there are at least k entries — otherwise a short listing would stack
+        entirely in column 0 and Brief (2 cols) / Medium (3 cols) would look
+        identical. When the listing overflows the screen the height saturates
+        at the visible-row count and the panel scrolls a column at a time.
+        """
+        visible = self._visible_rows()
+        k = column_count(self.view_mode)
+        n = len(self.entries)
+        if k <= 1 or n == 0:
+            return max(1, visible)
+        needed = -(-n // k)  # ceil(n / k)
+        return max(1, min(visible, needed))
+
     def _ensure_cursor_visible(self) -> None:
-        n = self._visible_rows()
-        if self.cursor < self.row_offset:
-            self.row_offset = self.cursor
-        elif self.cursor >= self.row_offset + n:
-            self.row_offset = self.cursor - n + 1
-        self.row_offset = max(0, self.row_offset)
+        k = column_count(self.view_mode)
+        if k == 1:
+            rows = self._visible_rows()
+            if self.cursor < self.row_offset:
+                self.row_offset = self.cursor
+            elif self.cursor >= self.row_offset + rows:
+                self.row_offset = self.cursor - rows + 1
+            self.row_offset = max(0, self.row_offset)
+            return
+        # Multi-column (Brief/Medium): a page holds rows*k entries laid out
+        # column-major. Keep row_offset a multiple of `rows` so columns stay
+        # aligned (snap first in case we just switched from a single-column
+        # mode), then scroll a whole column at a time.
+        rows = self._multicol_col_height()
+        self.row_offset -= self.row_offset % rows
+        page = rows * k
+        while self.cursor < self.row_offset:
+            self.row_offset = max(0, self.row_offset - rows)
+        while self.cursor >= self.row_offset + page:
+            self.row_offset += rows
 
     # ------------------------------------------------------------------
     # Quick search
@@ -433,13 +474,26 @@ class FilePanel(WindowContent):
         width = self.size.width
         if width <= 0:
             return Strip.blank(0)
+        h = self._panel_size[1] if self._panel_size is not None else self.size.height
         if y == 0:
             return self._render_header(width)
-        if self._qs_active:
-            h = self._panel_size[1] if self._panel_size is not None else self.size.height
-            if y == h - 1:
-                return self._render_qs_bar(width)
+        if y == h - 1:
+            return self._render_footer(width)
+        if self._qs_active and y == h - 2:
+            return self._render_qs_bar(width)
+        # Body rows. y == 1 is the first body row.
+        if is_multicolumn(self.view_mode):
+            return self._render_multicol_row(y - 1, width)
         return self._render_entry_row(y - 1 + self.row_offset, width)
+
+    def _render_footer(self, width: int) -> Strip:
+        """Bottom panel row: full, untruncated name of the cursor entry."""
+        if 0 <= self.cursor < len(self.entries):
+            name = self.entries[self.cursor].name
+        else:
+            name = ""
+        text = (" " + name).ljust(width)[:width]
+        return Strip([Segment(text, RichStyle(reverse=True))])
 
     def _render_qs_bar(self, width: int) -> Strip:
         """Bottom-of-panel indicator: 'Quick search: <query>_'.
@@ -462,6 +516,54 @@ class FilePanel(WindowContent):
         return Strip([Segment(text, style)])
 
     def _render_header(self, width: int) -> Strip:
+        mode = self.view_mode
+        if is_multicolumn(mode):
+            k = column_count(mode)
+            col_w = column_width(width, k)
+            cells = [
+                ("Name" if col == 0 else "").center(col_w)[:col_w]
+                for col in range(k)
+            ]
+            text = COL_SEP.join(cells)[:width].ljust(width)
+            return Strip([Segment(text, RichStyle(bold=True))])
+        if mode is PanelViewMode.DETAILED:
+            return self._render_header_detailed(width)
+        if mode is PanelViewMode.DESCRIPTION:
+            return self._render_header_description(width)
+        if mode is PanelViewMode.SHORT:
+            return self._render_header_short(width)
+        return self._render_header_full(width)
+
+    def _render_header_short(self, width: int) -> Strip:
+        from tyui.fm.panel_view import name_col_width
+        ncol = name_col_width(PanelViewMode.SHORT, width)
+        base = RichStyle(bold=True)
+        name = "Name".center(ncol)
+        size = "Size".center(self._SIZE_COL)
+        text = f"{name}{COL_SEP}{size}"[:width].ljust(width)
+        return Strip([Segment(text, base)])
+
+    def _render_header_detailed(self, width: int) -> Strip:
+        from tyui.fm.panel_view import name_col_width
+        ncol = name_col_width(PanelViewMode.DETAILED, width)
+        base = RichStyle(bold=True)
+        name = "Name".center(ncol)
+        size = "Size".center(self._SIZE_COL)
+        date = "Date".center(11)
+        attr = "Attr".center(10)
+        text = f"{name}{COL_SEP}{size}{COL_SEP}{date}{COL_SEP}{attr}"[:width].ljust(width)
+        return Strip([Segment(text, base)])
+
+    def _render_header_description(self, width: int) -> Strip:
+        from tyui.fm.panel_view import name_col_width
+        ncol = name_col_width(PanelViewMode.DESCRIPTION, width)
+        base = RichStyle(bold=True)
+        name = "Name".center(ncol)
+        desc = "Description".center(max(1, width - ncol - 1))
+        text = f"{name}{COL_SEP}{desc}"[:width].ljust(width)
+        return Strip([Segment(text, base)])
+
+    def _render_header_full(self, width: int) -> Strip:
         name_col = max(1, width - self._SIZE_COL - self._DATE_COL - 2 * self._GUTTER)
         base = RichStyle(bold=True)
         # Underline the column matching the current sort order — the only
@@ -481,9 +583,10 @@ class FilePanel(WindowContent):
         name_label = "Name" + arrow_for(SortOrder.NAME)
         size_label = "Size" + arrow_for(SortOrder.SIZE)
         date_label = "Date" + arrow_for(SortOrder.MTIME)
-        name_field = (" " + name_label).ljust(name_col)
-        size_field = size_label.rjust(self._SIZE_COL)
-        date_field = date_label.ljust(self._DATE_COL)
+        # Header labels are centred within their column (data rows are not).
+        name_field = name_label.center(name_col)
+        size_field = size_label.center(self._SIZE_COL)
+        date_field = date_label.center(self._DATE_COL)
 
         segs: list[Segment] = []
         remaining = width
@@ -499,17 +602,19 @@ class FilePanel(WindowContent):
 
         if not push(name_field, style_for(SortOrder.NAME)):
             return Strip(segs)
-        if not push(" " * self._GUTTER, base):
+        if not push(COL_SEP, base):
             return Strip(segs)
         if not push(size_field, style_for(SortOrder.SIZE)):
             return Strip(segs)
-        if not push(" " * self._GUTTER, base):
+        if not push(COL_SEP, base):
             return Strip(segs)
         push(date_field, style_for(SortOrder.MTIME))
         return Strip(segs)
 
     def _header_column_at(self, x: int) -> SortOrder | None:
         """Map an x-pixel inside the header row to a sortable column."""
+        if self.view_mode is not PanelViewMode.FULL:
+            return None
         width = self.size.width if self._panel_size is None else self._panel_size[0]
         if width <= 0:
             return None
@@ -542,13 +647,18 @@ class FilePanel(WindowContent):
             event.stop()
             return
 
-        # Quick-search bar lives on the bottom row when active — ignore it.
-        if self._qs_active:
-            h = self._panel_size[1] if self._panel_size else self.size.height
-            if event.y == h - 1:
-                return
+        h = self._panel_size[1] if self._panel_size else self.size.height
+        # Footer row is non-interactive.
+        if event.y == h - 1:
+            return
+        # Quick-search bar (row above footer when active) — ignore.
+        if self._qs_active and event.y == h - 2:
+            return
 
-        idx = event.y - 1 + self.row_offset
+        if is_multicolumn(self.view_mode):
+            idx = self._multicol_index_at(event.x, event.y, self.size.width)
+        else:
+            idx = event.y - 1 + self.row_offset
         if not (0 <= idx < len(self.entries)):
             return
 
@@ -568,46 +678,25 @@ class FilePanel(WindowContent):
 
     def _render_entry_row(self, idx: int, width: int) -> Strip:
         if not (0 <= idx < len(self.entries)):
-            return Strip([Segment(" " * width)])
+            # Blank row below the listing, but keep the column separators so
+            # the vertical bars run to the bottom of the panel.
+            return Strip([Segment(empty_row_text(self.view_mode, width))])
         entry = self.entries[idx]
         is_cursor = idx == self.cursor
         is_selected = entry.path in self.selection
 
-        name_col = max(1, width - self._SIZE_COL - self._DATE_COL - 2 * self._GUTTER)
+        from tyui.fm.panel_view import name_col_width, row_text_single
+        name_col = name_col_width(self.view_mode, width)
         name = entry.name
         if len(name) > name_col - 1:
             name = name[: name_col - 2] + "…"
-        # ls -F style prefix: '/' for directories (and the '..' parent
-        # row), '*' for executable regular files, space otherwise.
-        if entry.is_dir or entry.is_parent:
-            prefix = "/"
-        elif entry.is_executable:
-            prefix = "*"
-        else:
-            prefix = " "
-        name_field = (prefix + name).ljust(name_col)
-
-        if entry.is_parent:
-            size_field = "<UP>".rjust(self._SIZE_COL)
-        elif entry.is_dir:
-            size_field = "<DIR>".rjust(self._SIZE_COL)
-        else:
-            size_field = format_size(entry.size).rjust(self._SIZE_COL)
-
-        date_field = format_mtime(entry.mtime).ljust(self._DATE_COL)
-
-        text = (name_field + " " + size_field + " " + date_field)[:width]
-        text = text.ljust(width)
+        text = row_text_single(self.view_mode, entry, width)
 
         style = self._row_style(
             is_cursor=is_cursor,
             is_selected=is_selected,
             focused=self._is_active_panel,
         )
-        # Quick-search highlight: split the row into 3 segments around the
-        # matched substring inside the displayed name (which lives at offset
-        # 1 inside name_field — there's a leading space). The match is only
-        # painted if it fits inside the visible name (post-truncation).
         if self._qs_active and self._qs_query and not entry.is_parent:
             hi = self._qs_highlight_segments(
                 text=text,
@@ -618,6 +707,62 @@ class FilePanel(WindowContent):
             if hi is not None:
                 return Strip(hi)
         return Strip([Segment(text, style)])
+
+    def _multicol_index_at(self, x: int, y: int, width: int) -> int:
+        """Entry index for a click at (x, y) in a multi-column layout.
+
+        `col` is clamped to the last column so a click in the right-edge
+        trailing pad (when width isn't an exact multiple of the columns)
+        maps to the last column rather than overflowing past it.
+        """
+        rows = self._multicol_col_height()
+        k = column_count(self.view_mode)
+        col_w = column_width(width, k)
+        vis_row = y - 1
+        if vis_row >= rows:
+            return -1  # click below the column height — no entry there
+        col = min(x // (col_w + self._GUTTER), k - 1)
+        return self.row_offset + col * rows + vis_row
+
+    def _render_multicol_row(self, vis_row: int, width: int) -> Strip:
+        """Render one visual row of a Brief/Medium (names-only) layout.
+
+        Column-major: the cell in column `col` on visual row `vis_row` is entry
+        ``row_offset + col*rows + vis_row``. The cursor cell inverts; selected
+        cells are yellow. Quick-search substring highlight is single-column only
+        (MVP) — multi-column shows cursor-cell styling but no inline paint.
+        """
+        from tyui.fm.panel_view import format_cell
+        rows = self._multicol_col_height()
+        k = column_count(self.view_mode)
+        col_w = column_width(width, k)
+        # Rows below the column height are empty (the column is only `rows`
+        # tall); without this guard they would re-show entries from the next
+        # column and produce duplicates. Keep the column separators so the
+        # vertical bars run to the bottom of the panel.
+        if vis_row >= rows:
+            empty = COL_SEP.join([" " * col_w] * k)[:width].ljust(width)
+            return Strip([Segment(empty)])
+        segs: list[Segment] = []
+        for col in range(k):
+            if col > 0:
+                segs.append(Segment(COL_SEP))  # column separator
+            idx = self.row_offset + col * rows + vis_row
+            if not (0 <= idx < len(self.entries)):
+                segs.append(Segment(" " * col_w))
+                continue
+            entry = self.entries[idx]
+            cell = format_cell(entry, col_w)
+            style = self._row_style(
+                is_cursor=(idx == self.cursor),
+                is_selected=(entry.path in self.selection),
+                focused=self._is_active_panel,
+            )
+            segs.append(Segment(cell, style))
+        used = k * col_w + (k - 1)
+        if used < width:
+            segs.append(Segment(" " * (width - used)))
+        return Strip(segs)
 
     def _qs_highlight_segments(
         self,
@@ -793,6 +938,7 @@ class FilePanel(WindowContent):
 
         return [
             WindowCommand(id="panel.new",    label="New",    handler=_bind("new")),
+            WindowCommand(id="panel.project_view", label="Project View", handler=_bind("project_view"), hotkey="f2"),
             WindowCommand(id="panel.view",   label="View",   handler=_bind("view"),   hotkey="f3"),
             WindowCommand(id="panel.edit",   label="Edit",   handler=_bind("edit"),   hotkey="f4"),
             WindowCommand(id="panel.copy",   label="Copy",   handler=_bind("copy"),   hotkey="f5"),

@@ -151,11 +151,11 @@ def test_ctrl_up_cycles_to_prev_match(tmp_path: Path):
 
 def test_visible_rows_shrinks_when_active(tmp_path: Path):
     p = _make_panel(tmp_path, [f"f{i:02d}.txt" for i in range(10)])
-    p._panel_size = (40, 12)  # height 12 -> 11 visible rows when idle
-    assert p._visible_rows() == 11
-    p.on_key(_key("ctrl+s"))
-    # Now bottom row is reserved for the search bar.
+    p._panel_size = (40, 12)  # height 12 -> 10 visible rows when idle (header + footer reserved)
     assert p._visible_rows() == 10
+    p.on_key(_key("ctrl+s"))
+    # Now an extra row is reserved for the search bar.
+    assert p._visible_rows() == 9
 
 
 def test_qs_bar_renders_at_bottom_when_active(tmp_path: Path):

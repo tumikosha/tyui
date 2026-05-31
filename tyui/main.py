@@ -66,9 +66,30 @@ def _resolve_we_paths(argv: list[str]) -> list[str]:
     return parser.parse_args(argv).paths
 
 
+def _resolve_we_launch(paths: list[str]) -> tuple[str, str | None, list[str]]:
+    """Pick the launch mode for the `we` command from its positional paths.
+
+    No paths at all -> fall back to the file manager (both panels) instead of
+    an empty editor. A lone directory -> seed the file manager at that path.
+    Anything with real files -> the usual cascaded-editor `we` mode.
+    """
+    if not paths:
+        return ("fm", None, [])
+    file_paths = [p for p in paths if not os.path.isdir(p)]
+    if not file_paths:
+        # Only directories were given; open the first one in the panels.
+        return ("fm", paths[0], [])
+    return ("we", None, file_paths)
+
+
 def main_we() -> None:
     paths = _resolve_we_paths(sys.argv[1:])
-    TyuiApp(launch_mode="we", initial_paths=paths).run()
+    launch_mode, initial_path, file_paths = _resolve_we_launch(paths)
+    TyuiApp(
+        launch_mode=launch_mode,
+        initial_path=initial_path,
+        initial_paths=file_paths,
+    ).run()
 
 
 if __name__ == "__main__":

@@ -87,9 +87,6 @@ class StatusBar(Widget):
             return sibling
         return None
 
-    def _item_width(self, item: StatusItem) -> int:
-        return len(f" {item.key} ") + len(f"{item.label} ")
-
     def render_line(self, y: int) -> Strip:
         if y != 0:
             return Strip.blank(self.size.width)
@@ -113,10 +110,24 @@ class StatusBar(Widget):
         self._item_spans = []
         x = 0
 
+        width = self.size.width
+        count = len(self._items)
+        if count == 0:
+            return Strip([Segment(" " * width, bg_style)] if width > 0 else [])
+
+        # NC/mc style: spread the F-key cells evenly across the full width.
+        # Each item gets an equal slot; the leftover columns from integer
+        # division are handed one-by-one to the first slots so the spans
+        # tile the whole bar with no gap on the right.
+        base, extra = divmod(width, count)
+
         for idx, item in enumerate(self._items):
+            slot_width = base + (1 if idx < extra else 0)
             item_start = x
             key_text = f" {item.key} "
-            label_text = f"{item.label} "
+            # Label fills the rest of the slot so cells abut edge-to-edge.
+            label_room = max(0, slot_width - len(key_text))
+            label_text = f"{item.label} ".ljust(label_room)[:label_room]
             ks = key_style
             ls = label_style
             interactive = item.handler is not None
@@ -130,12 +141,12 @@ class StatusBar(Widget):
                 if hover_bg is not None:
                     ls = ls + RichStyle(bgcolor=hover_bg)
             segments.append(Segment(key_text, ks))
-            segments.append(Segment(label_text, ls))
-            x += len(key_text) + len(label_text)
+            if label_text:
+                segments.append(Segment(label_text, ls))
+            x += slot_width
             self._item_spans.append((item_start, x, item))
 
-        total_width = x
-        remaining = self.size.width - total_width
+        remaining = width - x
         if remaining > 0:
             segments.append(Segment(" " * remaining, bg_style))
 
