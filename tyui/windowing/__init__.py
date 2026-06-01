@@ -34,7 +34,7 @@ from .palette import (
     Style,
     Theme,
 )
-from .themes import list_themes, load_theme, modern_dark, theme_registry
+from .themes import list_themes, load_theme, modern_dark, resolve_theme_path, theme_registry
 from .window import Window
 from .editor import EditorWidget, EditorContent, MacroAssignDialog
 from .core import (
@@ -84,6 +84,7 @@ __all__ = [
     "modern_dark",
     "load_theme",
     "list_themes",
+    "resolve_theme_path",
     "theme_registry",
     # helpers
     "make_window",

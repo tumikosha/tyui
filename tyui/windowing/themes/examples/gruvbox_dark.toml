@@ -1,0 +1,137 @@
+# Gruvbox Dark — warm, retro, high-readability palette.
+
+[theme]
+name = "gruvbox_dark"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#1d2021"
+[styles."desktop.pattern"]
+fg = "#3c3836"
+bg = "#1d2021"
+
+[styles."window.border.focused"]
+fg = "#ebdbb2"
+bg = "#282828"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#665c54"
+bg = "#282828"
+
+[styles."window.title.focused"]
+fg = "#fabd2f"
+bg = "#282828"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#a89984"
+bg = "#282828"
+[styles."window.subtitle"]
+fg = "#a89984"
+bg = "#282828"
+
+[styles."window.content"]
+fg = "#ebdbb2"
+bg = "#282828"
+
+[styles."decoration.close_box"]
+fg = "#fb4934"
+bg = "#282828"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#b8bb26"
+bg = "#282828"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#a89984"
+bg = "#282828"
+[styles."decoration.number"]
+fg = "#a89984"
+bg = "#282828"
+
+[styles."icon_tray.background"]
+bg = "#141617"
+[styles."icon.normal"]
+fg = "#ebdbb2"
+bg = "#141617"
+[styles."icon.hover"]
+fg = "#282828"
+bg = "#fabd2f"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#ebdbb2"
+bg = "#3c3836"
+[styles."menu.item"]
+fg = "#ebdbb2"
+bg = "#3c3836"
+[styles."menu.item.active"]
+fg = "#282828"
+bg = "#fabd2f"
+bold = true
+[styles."menu.hotkey"]
+fg = "#fb4934"
+bg = "#3c3836"
+[styles."menu.dropdown.border"]
+fg = "#665c54"
+bg = "#3c3836"
+[styles."menu.separator"]
+fg = "#504945"
+bg = "#3c3836"
+
+[styles."statusbar_bg"]
+fg = "#ebdbb2"
+bg = "#3c3836"
+[styles."statusbar_key"]
+fg = "#282828"
+bg = "#fe8019"
+bold = true
+[styles."statusbar_label"]
+fg = "#ebdbb2"
+bg = "#3c3836"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#504945"
+[styles."editor.selection_cursor"]
+bg = "#504945"
+reverse = true
+[styles."editor.search_match"]
+bg = "#665c54"
+[styles."editor.search_current"]
+bg = "#fabd2f"
+[styles."editor.fold_marker"]
+fg = "#fe8019"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#665c54"
+
+[styles."editor.syntax.keyword"]
+fg = "#fb4934"
+[styles."editor.syntax.name"]
+fg = "#83a598"
+[styles."editor.syntax.function"]
+fg = "#b8bb26"
+[styles."editor.syntax.class"]
+fg = "#fabd2f"
+[styles."editor.syntax.string"]
+fg = "#b8bb26"
+[styles."editor.syntax.number"]
+fg = "#d3869b"
+[styles."editor.syntax.comment"]
+fg = "#928374"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#fe8019"
+[styles."editor.syntax.builtin"]
+fg = "#8ec07c"
+[styles."editor.syntax.error"]
+fg = "#fb4934"

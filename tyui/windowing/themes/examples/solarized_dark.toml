@@ -1,0 +1,137 @@
+# Solarized Dark — Ethan Schoonover's classic low-contrast palette.
+
+[theme]
+name = "solarized_dark"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#00212b"
+[styles."desktop.pattern"]
+fg = "#073642"
+bg = "#00212b"
+
+[styles."window.border.focused"]
+fg = "#93a1a1"
+bg = "#002b36"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#586e75"
+bg = "#002b36"
+
+[styles."window.title.focused"]
+fg = "#b58900"
+bg = "#002b36"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#657b83"
+bg = "#002b36"
+[styles."window.subtitle"]
+fg = "#657b83"
+bg = "#002b36"
+
+[styles."window.content"]
+fg = "#839496"
+bg = "#002b36"
+
+[styles."decoration.close_box"]
+fg = "#dc322f"
+bg = "#002b36"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#859900"
+bg = "#002b36"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#657b83"
+bg = "#002b36"
+[styles."decoration.number"]
+fg = "#657b83"
+bg = "#002b36"
+
+[styles."icon_tray.background"]
+bg = "#001b22"
+[styles."icon.normal"]
+fg = "#839496"
+bg = "#001b22"
+[styles."icon.hover"]
+fg = "#002b36"
+bg = "#2aa198"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#93a1a1"
+bg = "#073642"
+[styles."menu.item"]
+fg = "#93a1a1"
+bg = "#073642"
+[styles."menu.item.active"]
+fg = "#002b36"
+bg = "#2aa198"
+bold = true
+[styles."menu.hotkey"]
+fg = "#cb4b16"
+bg = "#073642"
+[styles."menu.dropdown.border"]
+fg = "#586e75"
+bg = "#073642"
+[styles."menu.separator"]
+fg = "#586e75"
+bg = "#073642"
+
+[styles."statusbar_bg"]
+fg = "#93a1a1"
+bg = "#073642"
+[styles."statusbar_key"]
+fg = "#002b36"
+bg = "#b58900"
+bold = true
+[styles."statusbar_label"]
+fg = "#93a1a1"
+bg = "#073642"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#073642"
+[styles."editor.selection_cursor"]
+bg = "#073642"
+reverse = true
+[styles."editor.search_match"]
+bg = "#586e75"
+[styles."editor.search_current"]
+bg = "#b58900"
+[styles."editor.fold_marker"]
+fg = "#cb4b16"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#586e75"
+
+[styles."editor.syntax.keyword"]
+fg = "#859900"
+[styles."editor.syntax.name"]
+fg = "#268bd2"
+[styles."editor.syntax.function"]
+fg = "#268bd2"
+[styles."editor.syntax.class"]
+fg = "#b58900"
+[styles."editor.syntax.string"]
+fg = "#2aa198"
+[styles."editor.syntax.number"]
+fg = "#d33682"
+[styles."editor.syntax.comment"]
+fg = "#586e75"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#839496"
+[styles."editor.syntax.builtin"]
+fg = "#cb4b16"
+[styles."editor.syntax.error"]
+fg = "#dc322f"

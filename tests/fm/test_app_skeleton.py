@@ -1324,3 +1324,140 @@ async def test_windows_menu_pick_survives_menu_close(tmp_path):
         app.menu_bar.deactivate()
         await pilot.pause(); await pilot.pause()
         assert desktop.focused_window is target
+
+
+@pytest.mark.asyncio
+async def test_options_menu_exposes_theme_switching():
+    app = TyuiApp(launch_mode="fm", initial_path="/tmp")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # An "Options" menu lists the cycle command plus one item per theme.
+        labels = [m.label for m in app._all_menus]
+        assert "Options" in labels
+        assert app.command_registry.get("theme.cycle") is not None
+        assert app.command_registry.get("theme.set.paper_light") is not None
+
+        desktop = app.query_one(Desktop)
+        start = desktop.palette.theme.name
+        app.action_cycle_theme()
+        await pilot.pause()
+        assert desktop.palette.theme.name != start
+
+        app._apply_theme("paper_light")
+        await pilot.pause()
+        assert desktop.palette.theme.name == "paper_light"
+
+
+@pytest.mark.asyncio
+async def test_theme_switch_repaints_file_panel_background():
+    """Switching theme must repaint the panel body, not only window borders."""
+    app = TyuiApp(launch_mode="fm", initial_path="/tmp")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        desktop = app.query_one(Desktop)
+        panel = next(
+            w.content for w in desktop.windows if isinstance(w.content, FilePanel)
+        )
+
+        def first_row_bg():
+            for seg in panel.render_line(1):
+                if seg.style is not None and seg.style.bgcolor is not None:
+                    return seg.style.bgcolor.name
+            return None
+
+        app._apply_theme("modern_dark")
+        await pilot.pause()
+        dark_bg = first_row_bg()
+
+        app._apply_theme("paper_light")
+        await pilot.pause()
+        light_bg = first_row_bg()
+
+        assert dark_bg is not None and light_bg is not None
+        assert dark_bg != light_bg
+
+
+@pytest.mark.asyncio
+async def test_selected_theme_persists_across_restart():
+    """Picking a theme writes it to user config; a fresh app re-applies it."""
+    from tyui.config import user_config
+
+    app = TyuiApp(launch_mode="fm", initial_path="/tmp")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Cold start with empty (isolated) config -> built-in default.
+        assert app.query_one(Desktop).palette.theme.name == "modern_dark"
+        app._apply_theme("dracula", persist=True)
+        await pilot.pause()
+    assert user_config.get_theme() == "dracula"
+
+    restarted = TyuiApp(launch_mode="fm", initial_path="/tmp")
+    async with restarted.run_test() as pilot:
+        await pilot.pause()
+        assert restarted.query_one(Desktop).palette.theme.name == "dracula"
+
+
+@pytest.mark.asyncio
+async def test_unknown_persisted_theme_falls_back_to_default():
+    from tyui.config import user_config
+
+    user_config.set_theme("no_such_theme")
+    app = TyuiApp(launch_mode="fm", initial_path="/tmp")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.query_one(Desktop).palette.theme.name == "modern_dark"
+
+
+@pytest.mark.asyncio
+async def test_edit_theme_opens_toml_for_file_backed_theme():
+    """Options → Edit theme opens the current theme's .toml in an editor."""
+    app = TyuiApp(launch_mode="fm", initial_path="/tmp")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        desktop = app.query_one(Desktop)
+        app._apply_theme("dracula")
+        await pilot.pause()
+        before = len(desktop.windows)
+        app.action_edit_theme()
+        await pilot.pause()
+        assert len(desktop.windows) == before + 1
+        # The new editor window points at dracula.toml.
+        opened = [
+            w for w in desktop.windows
+            if getattr(getattr(w.content, "_editor", None), "buffer", None) is not None
+            and getattr(w.content._editor.buffer, "file_path", None)
+            and str(w.content._editor.buffer.file_path).endswith("dracula.toml")
+        ]
+        assert opened, "no editor window opened for dracula.toml"
+
+
+@pytest.mark.asyncio
+async def test_edit_theme_on_builtin_opens_no_window():
+    """modern_dark has no file: Edit theme shows a hint, opens nothing."""
+    app = TyuiApp(launch_mode="fm", initial_path="/tmp")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        desktop = app.query_one(Desktop)
+        app._apply_theme("modern_dark")
+        await pilot.pause()
+        before = len(desktop.windows)
+        app.action_edit_theme()
+        await pilot.pause()
+        assert len(desktop.windows) == before
+
+
+@pytest.mark.asyncio
+async def test_apply_theme_invalidates_registry_cache(monkeypatch):
+    """Re-applying a theme drops its cached parse so file edits show up."""
+    from tyui.windowing.themes import loader
+
+    app = TyuiApp(launch_mode="fm", initial_path="/tmp")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        calls = []
+        monkeypatch.setattr(
+            loader.theme_registry, "invalidate", lambda name=None: calls.append(name)
+        )
+        app._apply_theme("nord")
+        await pilot.pause()
+        assert "nord" in calls

@@ -105,6 +105,24 @@ def load_theme(path_or_name: str | Path) -> Theme:
     )
 
 
+def resolve_theme_path(name: str) -> Path | None:
+    """File path of theme ``name``, or None if it has no editable file.
+
+    Mirrors the search order in :func:`load_theme` (user themes dir, then the
+    bundled examples/). Returns None for ``modern_dark`` (a Python object with
+    no TOML) and for unknown names.
+    """
+    if name == "modern_dark":
+        return None
+    candidate = USER_THEMES_DIR / f"{name}.toml"
+    if candidate.exists():
+        return candidate
+    examples = Path(__file__).parent / "examples" / f"{name}.toml"
+    if examples.exists():
+        return examples
+    return None
+
+
 def list_themes() -> list[str]:
     """List available theme names: built-in + user + examples."""
     names: set[str] = {"modern_dark"}

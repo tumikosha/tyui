@@ -1,0 +1,137 @@
+# Dracula — popular high-contrast dark theme with purple accents.
+
+[theme]
+name = "dracula"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#21222c"
+[styles."desktop.pattern"]
+fg = "#343746"
+bg = "#21222c"
+
+[styles."window.border.focused"]
+fg = "#f8f8f2"
+bg = "#282a36"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#6272a4"
+bg = "#282a36"
+
+[styles."window.title.focused"]
+fg = "#bd93f9"
+bg = "#282a36"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#6272a4"
+bg = "#282a36"
+[styles."window.subtitle"]
+fg = "#6272a4"
+bg = "#282a36"
+
+[styles."window.content"]
+fg = "#f8f8f2"
+bg = "#282a36"
+
+[styles."decoration.close_box"]
+fg = "#ff5555"
+bg = "#282a36"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#50fa7b"
+bg = "#282a36"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#6272a4"
+bg = "#282a36"
+[styles."decoration.number"]
+fg = "#6272a4"
+bg = "#282a36"
+
+[styles."icon_tray.background"]
+bg = "#191a21"
+[styles."icon.normal"]
+fg = "#f8f8f2"
+bg = "#191a21"
+[styles."icon.hover"]
+fg = "#282a36"
+bg = "#bd93f9"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#f8f8f2"
+bg = "#191a21"
+[styles."menu.item"]
+fg = "#f8f8f2"
+bg = "#191a21"
+[styles."menu.item.active"]
+fg = "#282a36"
+bg = "#bd93f9"
+bold = true
+[styles."menu.hotkey"]
+fg = "#ff79c6"
+bg = "#191a21"
+[styles."menu.dropdown.border"]
+fg = "#6272a4"
+bg = "#282a36"
+[styles."menu.separator"]
+fg = "#44475a"
+bg = "#282a36"
+
+[styles."statusbar_bg"]
+fg = "#f8f8f2"
+bg = "#191a21"
+[styles."statusbar_key"]
+fg = "#282a36"
+bg = "#ff79c6"
+bold = true
+[styles."statusbar_label"]
+fg = "#f8f8f2"
+bg = "#191a21"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#44475a"
+[styles."editor.selection_cursor"]
+bg = "#44475a"
+reverse = true
+[styles."editor.search_match"]
+bg = "#6272a4"
+[styles."editor.search_current"]
+bg = "#ffb86c"
+[styles."editor.fold_marker"]
+fg = "#ffb86c"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#6272a4"
+
+[styles."editor.syntax.keyword"]
+fg = "#ff79c6"
+[styles."editor.syntax.name"]
+fg = "#f8f8f2"
+[styles."editor.syntax.function"]
+fg = "#50fa7b"
+[styles."editor.syntax.class"]
+fg = "#8be9fd"
+[styles."editor.syntax.string"]
+fg = "#f1fa8c"
+[styles."editor.syntax.number"]
+fg = "#bd93f9"
+[styles."editor.syntax.comment"]
+fg = "#6272a4"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#ff79c6"
+[styles."editor.syntax.builtin"]
+fg = "#8be9fd"
+[styles."editor.syntax.error"]
+fg = "#ff5555"

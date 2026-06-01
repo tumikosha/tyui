@@ -52,6 +52,7 @@ from tyui.fm.file_panel import FilePanel
 from tyui.fm.find_file import FindOptions, walk as find_walk
 from tyui.fm.find_results import SearchResultsContent
 from tyui.fm.keymap import DEFAULT_FKEY_LABELS, EDITOR_FKEY_LABELS
+from tyui.config import user_config
 from tyui.fm.panel_view import PanelViewMode
 from tyui.fm.sort import SortOrder
 from tyui.windowing import (
@@ -73,6 +74,9 @@ from tyui.windowing import (
     WindowCommand,
     WindowFocusChanged,
     WindowManager,
+    list_themes,
+    resolve_theme_path,
+    theme_registry,
     make_window,
     show_command_palette,
     show_modal,
@@ -83,6 +87,11 @@ from tyui.fm.hex_viewer import HexViewerContent, HexViewerWidget
 from tyui.fm.key_probe import KeyProbeContent
 from tyui.fm.viewer import ViewerContent
 from tyui.windowing.editor import EditorContent
+
+
+def _theme_label(name: str) -> str:
+    """Turn a theme id like ``midnight_commander`` into ``Midnight Commander``."""
+    return name.replace("_", " ").replace("-", " ").title()
 
 
 class _FocusableEditorContent(EditorContent):
@@ -333,10 +342,14 @@ class TyuiApp(App):
         # are only mounted on `menu_bar.menus` while a relevant window is
         # focused.
         self._all_menus: list[Menu] = []
+        # Available theme names (built-in + user + examples) and the index of
+        # the currently active one, so "Cycle theme" advances predictably.
+        self._theme_names: list[str] = []
+        self._theme_index: int = 0
 
     def compose(self) -> ComposeResult:
         self.menu_bar = MenuBar()
-        self.desktop = Desktop(theme_name="modern_dark")
+        self.desktop = Desktop(theme_name=self._resolve_initial_theme())
         hist_path = Path.home() / ".config" / "tyui" / "history"
         self.command_history = History(hist_path, cap=1000)
         self.command_line = CommandLine(id="cmdline", history=self.command_history)
@@ -679,12 +692,96 @@ class TyuiApp(App):
                     label=f"View: {label} ({side})",
                     handler=(lambda pid=panel_id, m=mode: self._set_panel_view_mode(pid, m)),
                 ))
+        # Theme commands: one "Cycle theme" plus a direct-select command per
+        # available theme. Names come from list_themes() (built-in + user +
+        # examples), kept in self._theme_names so Options menu mirrors them.
+        self._theme_names = list_themes()
+        if self.desktop is not None:
+            current = self.desktop.palette.theme.name
+            if current in self._theme_names:
+                self._theme_index = self._theme_names.index(current)
+        cmds.append(WindowCommand(
+            id="theme.cycle",
+            label="Cycle theme",
+            handler=self.action_cycle_theme,
+            hotkey="ctrl+t",
+        ))
+        cmds.append(WindowCommand(
+            id="theme.edit",
+            label="Edit theme",
+            handler=self.action_edit_theme,
+        ))
+        for name in self._theme_names:
+            cmds.append(WindowCommand(
+                id=f"theme.set.{name}",
+                label=f"Theme: {_theme_label(name)}",
+                handler=(lambda n=name: self._apply_theme(n, persist=True)),
+            ))
         self.command_registry.register_many(cmds)
 
     def action_open_palette(self) -> None:
         if self.dispatcher is None or self.desktop is None:
             return
         show_command_palette(self.desktop, self.dispatcher)
+
+    def _resolve_initial_theme(self) -> str:
+        """Theme to paint on startup: the persisted one if still valid, else
+        the built-in default. Validates against list_themes() and a load probe
+        so a stale/renamed/corrupt entry can never crash the initial paint."""
+        name = user_config.get_theme()
+        if name and name in list_themes():
+            try:
+                theme_registry.get(name)
+            except Exception:
+                return "modern_dark"
+            return name
+        return "modern_dark"
+
+    def _apply_theme(self, name: str, *, persist: bool = False) -> None:
+        """Switch the active theme and repaint the whole shell.
+
+        Desktop.set_theme repaints the desktop, windows and icon tray; the
+        menu bar and status bar resolve the palette lazily from the desktop,
+        so they just need a refresh to pick up the new colours. ``persist``
+        writes the choice to the user config so it survives a restart — set
+        for user-initiated switches, left off for programmatic/test calls.
+        """
+        if self.desktop is None:
+            return
+        # Drop any cached parse so re-selecting a theme after editing its file
+        # (Options → Edit theme) re-reads it from disk and shows the changes.
+        theme_registry.invalidate(name)
+        self.desktop.set_theme(name)
+        if name in self._theme_names:
+            self._theme_index = self._theme_names.index(name)
+        if self.menu_bar is not None:
+            self.menu_bar.refresh()
+        if self.status_bar is not None:
+            self.status_bar.refresh()
+        if persist:
+            user_config.set_theme(name)
+
+    def action_cycle_theme(self) -> None:
+        """Advance to the next available theme (Ctrl+T / Options menu)."""
+        if not self._theme_names:
+            return
+        self._theme_index = (self._theme_index + 1) % len(self._theme_names)
+        self._apply_theme(self._theme_names[self._theme_index], persist=True)
+
+    def action_edit_theme(self) -> None:
+        """Open the current theme's .toml in the editor (Options → Edit theme)."""
+        if self.desktop is None or self._has_active_modal():
+            return
+        name = self.desktop.palette.theme.name
+        path = resolve_theme_path(name)
+        if path is None:
+            self.notify(
+                f"Тема «{name}» встроена и не имеет файла — "
+                "переключитесь на другую тему, чтобы редактировать.",
+                severity="warning",
+            )
+            return
+        self._open_editor_window(path)
 
     def action_key_probe(self) -> None:
         """Open the diagnostic Key Probe window.
@@ -825,6 +922,15 @@ class TyuiApp(App):
                 MenuSeparator(),
                 MenuItem(command_id="toggle_syntax"),
                 MenuItem(command_id="set_language"),
+            ]),
+            Menu("Options", [
+                MenuItem(label="Cycle theme", command_id="theme.cycle"),
+                MenuItem(label="Edit theme", command_id="theme.edit"),
+                MenuSeparator(),
+                *[
+                    MenuItem(label=_theme_label(name), command_id=f"theme.set.{name}")
+                    for name in self._theme_names
+                ],
             ]),
             Menu("Help", [
                 MenuItem(command_id="help.key_probe"),

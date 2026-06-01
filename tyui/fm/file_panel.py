@@ -470,6 +470,53 @@ class FilePanel(WindowContent):
     _DATE_COL = 16   # "YYYY-MM-DD HH:MM"
     _GUTTER = 1      # one space separator after Name and after Size
 
+    # ------------------------------------------------------------------
+    # Theming — pull the base fg/bg from the Desktop palette so the panel
+    # follows theme switches. Row styles (cursor/selected/header) are layered
+    # ON TOP of this base, so reverse/bold/accent stay relative to the theme.
+    # When no Desktop ancestor is reachable (unit tests render the panel
+    # unmounted) the palette is None and the base is an empty style — segments
+    # render exactly as before.
+    # ------------------------------------------------------------------
+
+    def _get_palette(self):
+        from tyui.windowing.palette import Palette
+        try:
+            for ancestor in self.ancestors_with_self:
+                pal = getattr(ancestor, "palette", None)
+                if isinstance(pal, Palette):
+                    return pal
+        except Exception:
+            return None
+        return None
+
+    def _base_style(self) -> RichStyle:
+        """Themed background+foreground every row is painted on top of.
+
+        Prefers a panel-specific ``panel.content`` role but falls back to
+        ``window.content`` (defined by every built-in theme), so panels follow
+        theme switches without each theme having to spell out a panel role.
+        """
+        pal = self._get_palette()
+        if pal is None:
+            return RichStyle()
+        style = pal.get("panel.content")
+        if style.fg is None and style.bg is None:
+            style = pal.get("window.content")
+        return style.to_rich()
+
+    def apply_theme(self) -> None:
+        """Re-apply the themed background and repaint (called on theme switch)."""
+        base = self._base_style()
+        if base.bgcolor is not None:
+            self.styles.background = base.bgcolor.name
+        if base.color is not None:
+            self.styles.color = base.color.name
+        self.refresh()
+
+    def on_mount(self) -> None:
+        self.apply_theme()
+
     def render_line(self, y: int) -> Strip:
         width = self.size.width
         if width <= 0:
@@ -493,7 +540,7 @@ class FilePanel(WindowContent):
         else:
             name = ""
         text = (" " + name).ljust(width)[:width]
-        return Strip([Segment(text, RichStyle(reverse=True))])
+        return Strip([Segment(text, self._base_style() + RichStyle(reverse=True))])
 
     def _render_qs_bar(self, width: int) -> Strip:
         """Bottom-of-panel indicator: 'Quick search: <query>_'.
@@ -508,10 +555,12 @@ class FilePanel(WindowContent):
         else:
             text = text.ljust(width)
         miss = self._qs_query and not self._qs_has_any_match()
+        # The no-match red is a fixed alarm colour; the normal bar stays
+        # relative (reverse) so it tracks the theme.
         style = (
             RichStyle(color="white", bgcolor="red", bold=True)
             if miss
-            else RichStyle(reverse=True, bold=True)
+            else self._base_style() + RichStyle(reverse=True, bold=True)
         )
         return Strip([Segment(text, style)])
 
@@ -525,7 +574,7 @@ class FilePanel(WindowContent):
                 for col in range(k)
             ]
             text = COL_SEP.join(cells)[:width].ljust(width)
-            return Strip([Segment(text, RichStyle(bold=True))])
+            return Strip([Segment(text, self._base_style() + RichStyle(bold=True))])
         if mode is PanelViewMode.DETAILED:
             return self._render_header_detailed(width)
         if mode is PanelViewMode.DESCRIPTION:
@@ -537,7 +586,7 @@ class FilePanel(WindowContent):
     def _render_header_short(self, width: int) -> Strip:
         from tyui.fm.panel_view import name_col_width
         ncol = name_col_width(PanelViewMode.SHORT, width)
-        base = RichStyle(bold=True)
+        base = self._base_style() + RichStyle(bold=True)
         name = "Name".center(ncol)
         size = "Size".center(self._SIZE_COL)
         text = f"{name}{COL_SEP}{size}"[:width].ljust(width)
@@ -546,7 +595,7 @@ class FilePanel(WindowContent):
     def _render_header_detailed(self, width: int) -> Strip:
         from tyui.fm.panel_view import name_col_width
         ncol = name_col_width(PanelViewMode.DETAILED, width)
-        base = RichStyle(bold=True)
+        base = self._base_style() + RichStyle(bold=True)
         name = "Name".center(ncol)
         size = "Size".center(self._SIZE_COL)
         date = "Date".center(11)
@@ -557,7 +606,7 @@ class FilePanel(WindowContent):
     def _render_header_description(self, width: int) -> Strip:
         from tyui.fm.panel_view import name_col_width
         ncol = name_col_width(PanelViewMode.DESCRIPTION, width)
-        base = RichStyle(bold=True)
+        base = self._base_style() + RichStyle(bold=True)
         name = "Name".center(ncol)
         desc = "Description".center(max(1, width - ncol - 1))
         text = f"{name}{COL_SEP}{desc}"[:width].ljust(width)
@@ -565,12 +614,12 @@ class FilePanel(WindowContent):
 
     def _render_header_full(self, width: int) -> Strip:
         name_col = max(1, width - self._SIZE_COL - self._DATE_COL - 2 * self._GUTTER)
-        base = RichStyle(bold=True)
+        base = self._base_style() + RichStyle(bold=True)
         # Underline the column matching the current sort order — the only
         # built-in visual hint that "this is what the listing is sorted by".
         # SortOrder.EXT has no dedicated column, so no header is underlined.
         def style_for(order: SortOrder) -> RichStyle:
-            return RichStyle(bold=True, underline=True) if self.sort_order == order else base
+            return base + RichStyle(underline=True) if self.sort_order == order else base
 
         # Arrow reflects the live direction so a double-click toggle is
         # immediately visible: ↑ = ascending (A→Z, smallest first), ↓ =
@@ -680,7 +729,7 @@ class FilePanel(WindowContent):
         if not (0 <= idx < len(self.entries)):
             # Blank row below the listing, but keep the column separators so
             # the vertical bars run to the bottom of the panel.
-            return Strip([Segment(empty_row_text(self.view_mode, width))])
+            return Strip([Segment(empty_row_text(self.view_mode, width), self._base_style())])
         entry = self.entries[idx]
         is_cursor = idx == self.cursor
         is_selected = entry.path in self.selection
@@ -740,16 +789,17 @@ class FilePanel(WindowContent):
         # tall); without this guard they would re-show entries from the next
         # column and produce duplicates. Keep the column separators so the
         # vertical bars run to the bottom of the panel.
+        base = self._base_style()
         if vis_row >= rows:
             empty = COL_SEP.join([" " * col_w] * k)[:width].ljust(width)
-            return Strip([Segment(empty)])
+            return Strip([Segment(empty, base)])
         segs: list[Segment] = []
         for col in range(k):
             if col > 0:
-                segs.append(Segment(COL_SEP))  # column separator
+                segs.append(Segment(COL_SEP, base))  # column separator
             idx = self.row_offset + col * rows + vis_row
             if not (0 <= idx < len(self.entries)):
-                segs.append(Segment(" " * col_w))
+                segs.append(Segment(" " * col_w, base))
                 continue
             entry = self.entries[idx]
             cell = format_cell(entry, col_w)
@@ -761,7 +811,7 @@ class FilePanel(WindowContent):
             segs.append(Segment(cell, style))
         used = k * col_w + (k - 1)
         if used < width:
-            segs.append(Segment(" " * (width - used)))
+            segs.append(Segment(" " * (width - used), base))
         return Strip(segs)
 
     def _qs_highlight_segments(
@@ -802,20 +852,22 @@ class FilePanel(WindowContent):
     ) -> RichStyle:
         # Active panel: cursor row inverts (reverse=True). Selected entries
         # are yellow-bold. Inactive panel: cursor row is just bold so the
-        # user can see at a glance which panel is "live".
+        # user can see at a glance which panel is "live". All layered on the
+        # themed base so colours/background follow the active theme.
+        base = self._base_style()
         if is_cursor and is_selected:
-            return RichStyle(
+            return base + RichStyle(
                 color="yellow",
                 bold=True,
                 reverse=focused,
             )
         if is_cursor:
             if focused:
-                return RichStyle(reverse=True)
-            return RichStyle(bold=True)
+                return base + RichStyle(reverse=True)
+            return base + RichStyle(bold=True)
         if is_selected:
-            return RichStyle(color="yellow", bold=True)
-        return RichStyle()
+            return base + RichStyle(color="yellow", bold=True)
+        return base
 
     # ------------------------------------------------------------------
     # Focus handling — repaint on focus/blur so the cursor-row style

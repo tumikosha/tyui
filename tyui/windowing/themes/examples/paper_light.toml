@@ -1,0 +1,137 @@
+# Light "paper" theme — a bright counterpart to the dark built-ins.
+
+[theme]
+name = "paper_light"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#c8c8c8"
+[styles."desktop.pattern"]
+fg = "#b0b0b0"
+bg = "#c8c8c8"
+
+[styles."window.border.focused"]
+fg = "#1c1c1c"
+bg = "#f5f5f5"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#9a9a9a"
+bg = "#f5f5f5"
+
+[styles."window.title.focused"]
+fg = "#1c1c1c"
+bg = "#f5f5f5"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#6a6a6a"
+bg = "#f5f5f5"
+[styles."window.subtitle"]
+fg = "#5a5a5a"
+bg = "#f5f5f5"
+
+[styles."window.content"]
+fg = "#1c1c1c"
+bg = "#ffffff"
+
+[styles."decoration.close_box"]
+fg = "#c00000"
+bg = "#f5f5f5"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#007000"
+bg = "#f5f5f5"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#5a5a5a"
+bg = "#f5f5f5"
+[styles."decoration.number"]
+fg = "#5a5a5a"
+bg = "#f5f5f5"
+
+[styles."icon_tray.background"]
+bg = "#a8a8a8"
+[styles."icon.normal"]
+fg = "#1c1c1c"
+bg = "#a8a8a8"
+[styles."icon.hover"]
+fg = "#ffffff"
+bg = "#1c1c1c"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#1c1c1c"
+bg = "#d8d8d8"
+[styles."menu.item"]
+fg = "#1c1c1c"
+bg = "#d8d8d8"
+[styles."menu.item.active"]
+fg = "#ffffff"
+bg = "#1c1c1c"
+bold = true
+[styles."menu.hotkey"]
+fg = "#c00000"
+bg = "#d8d8d8"
+[styles."menu.dropdown.border"]
+fg = "#5a5a5a"
+bg = "#f5f5f5"
+[styles."menu.separator"]
+fg = "#9a9a9a"
+bg = "#f5f5f5"
+
+[styles."statusbar_bg"]
+fg = "#1c1c1c"
+bg = "#d8d8d8"
+[styles."statusbar_key"]
+fg = "#ffffff"
+bg = "#0050a0"
+bold = true
+[styles."statusbar_label"]
+fg = "#1c1c1c"
+bg = "#d8d8d8"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#add6ff"
+[styles."editor.selection_cursor"]
+bg = "#add6ff"
+reverse = true
+[styles."editor.search_match"]
+bg = "#ffe9a8"
+[styles."editor.search_current"]
+bg = "#ffb000"
+[styles."editor.fold_marker"]
+fg = "#b06000"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#a0a0a0"
+
+[styles."editor.syntax.keyword"]
+fg = "#9c00b0"
+[styles."editor.syntax.name"]
+fg = "#0050a0"
+[styles."editor.syntax.function"]
+fg = "#7a5c00"
+[styles."editor.syntax.class"]
+fg = "#008060"
+[styles."editor.syntax.string"]
+fg = "#a03000"
+[styles."editor.syntax.number"]
+fg = "#005000"
+[styles."editor.syntax.comment"]
+fg = "#608060"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#404040"
+[styles."editor.syntax.builtin"]
+fg = "#008060"
+[styles."editor.syntax.error"]
+fg = "#c00000"

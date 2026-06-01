@@ -1,0 +1,137 @@
+# Nord — cool, muted arctic blue-grey palette.
+
+[theme]
+name = "nord"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#2b303b"
+[styles."desktop.pattern"]
+fg = "#3b4252"
+bg = "#2b303b"
+
+[styles."window.border.focused"]
+fg = "#eceff4"
+bg = "#2e3440"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#4c566a"
+bg = "#2e3440"
+
+[styles."window.title.focused"]
+fg = "#88c0d0"
+bg = "#2e3440"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#7b88a1"
+bg = "#2e3440"
+[styles."window.subtitle"]
+fg = "#7b88a1"
+bg = "#2e3440"
+
+[styles."window.content"]
+fg = "#d8dee9"
+bg = "#2e3440"
+
+[styles."decoration.close_box"]
+fg = "#bf616a"
+bg = "#2e3440"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#a3be8c"
+bg = "#2e3440"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#4c566a"
+bg = "#2e3440"
+[styles."decoration.number"]
+fg = "#4c566a"
+bg = "#2e3440"
+
+[styles."icon_tray.background"]
+bg = "#272c36"
+[styles."icon.normal"]
+fg = "#d8dee9"
+bg = "#272c36"
+[styles."icon.hover"]
+fg = "#2e3440"
+bg = "#88c0d0"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#e5e9f0"
+bg = "#3b4252"
+[styles."menu.item"]
+fg = "#e5e9f0"
+bg = "#3b4252"
+[styles."menu.item.active"]
+fg = "#2e3440"
+bg = "#88c0d0"
+bold = true
+[styles."menu.hotkey"]
+fg = "#d08770"
+bg = "#3b4252"
+[styles."menu.dropdown.border"]
+fg = "#4c566a"
+bg = "#3b4252"
+[styles."menu.separator"]
+fg = "#434c5e"
+bg = "#3b4252"
+
+[styles."statusbar_bg"]
+fg = "#e5e9f0"
+bg = "#3b4252"
+[styles."statusbar_key"]
+fg = "#2e3440"
+bg = "#88c0d0"
+bold = true
+[styles."statusbar_label"]
+fg = "#e5e9f0"
+bg = "#3b4252"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#434c5e"
+[styles."editor.selection_cursor"]
+bg = "#434c5e"
+reverse = true
+[styles."editor.search_match"]
+bg = "#4c566a"
+[styles."editor.search_current"]
+bg = "#ebcb8b"
+[styles."editor.fold_marker"]
+fg = "#d08770"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#4c566a"
+
+[styles."editor.syntax.keyword"]
+fg = "#81a1c1"
+[styles."editor.syntax.name"]
+fg = "#d8dee9"
+[styles."editor.syntax.function"]
+fg = "#88c0d0"
+[styles."editor.syntax.class"]
+fg = "#8fbcbb"
+[styles."editor.syntax.string"]
+fg = "#a3be8c"
+[styles."editor.syntax.number"]
+fg = "#b48ead"
+[styles."editor.syntax.comment"]
+fg = "#616e88"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#81a1c1"
+[styles."editor.syntax.builtin"]
+fg = "#8fbcbb"
+[styles."editor.syntax.error"]
+fg = "#bf616a"

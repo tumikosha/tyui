@@ -18,6 +18,7 @@ from tyui.windowing.themes.loader import (
     ThemeLoadError,
     list_themes,
     load_theme,
+    resolve_theme_path,
     theme_registry,
 )
 
@@ -152,3 +153,18 @@ class TestTOMLLoader:
         p.write_text("this is not = valid [[[ toml")
         with pytest.raises(ThemeLoadError):
             load_theme(p)
+
+
+class TestResolveThemePath:
+    def test_example_theme_resolves_to_toml(self):
+        p = resolve_theme_path("dracula")
+        assert p is not None
+        assert p.name == "dracula.toml"
+        assert p.parent.name == "examples"
+        assert p.exists()
+
+    def test_builtin_modern_dark_has_no_file(self):
+        assert resolve_theme_path("modern_dark") is None
+
+    def test_unknown_theme_returns_none(self):
+        assert resolve_theme_path("no_such_theme_xyz") is None

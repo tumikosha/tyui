@@ -160,6 +160,13 @@ class Desktop(Container):
         self.refresh(recompose=False)
         for w in self.windows + self.minimized_windows:
             w.refresh()
+            # The content widget paints itself from the palette (panels,
+            # editor); a Window.refresh() alone repaints chrome but not the
+            # child, so give the content an explicit repaint hook.
+            content = getattr(w, "content", None)
+            apply = getattr(content, "apply_theme", None)
+            if callable(apply):
+                apply()
         self._icon_tray.refresh()
 
     # --- window management -------------------------------------------------

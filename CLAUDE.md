@@ -153,7 +153,17 @@ tests; widgets and the app shell have async smoke/integration tests
 
 - `tyui/config/defaults.py` — fold rules, default key bindings, default
   settings (tab size, line numbers, fold-by-indent, etc.).
-- `tyui/themes/{dark,light}.yaml` — palette definitions consumed by
-  `tyui/windowing/themes/loader.py`.
-- Per-`vibe/general.md`, user hotkeys/macros are intended to live under
-  `~/.config/tyui/` (loader not implemented yet).
+- `tyui/config/user_config.py` — persisted user preferences in
+  `$XDG_CONFIG_HOME/tyui/config.json` (stdlib JSON, atomic best-effort
+  writes, fault-tolerant reads). Currently stores the selected `theme`;
+  `app._resolve_initial_theme()` reads it at startup and `_apply_theme(...,
+  persist=True)` writes it on a user switch. Tests isolate it via an autouse
+  `XDG_CONFIG_HOME` fixture in `tests/conftest.py`.
+- Theme palettes load from TOML: the built-in `modern_dark` plus example
+  themes in `tyui/windowing/themes/examples/*.toml`, discovered by
+  `list_themes()` and parsed by `tyui/windowing/themes/loader.py`. The
+  Options menu / `theme.cycle` (Ctrl+T) are built dynamically from that list.
+  A complete theme defines all 42 roles in `modern_dark` (older `turbo_blue`
+  / `midnight_commander` examples are partial at 21 roles).
+- Per-`vibe/general.md`, user hotkeys/macros are also intended to live under
+  `~/.config/tyui/` (those loaders not implemented yet).

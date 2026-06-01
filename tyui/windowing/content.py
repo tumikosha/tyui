@@ -149,6 +149,15 @@ class WindowContent(Widget):
     def on_window_blur(self) -> None:  # override as needed
         pass
 
+    def apply_theme(self) -> None:
+        """Repaint after the active palette changed.
+
+        Called by ``Desktop.set_theme`` on every window's content. The default
+        just refreshes this widget; contents that cache palette-derived CSS
+        (background/colour) or own inner widgets override to re-apply them.
+        """
+        self.refresh()
+
     def get_commands(self) -> list[WindowCommand]:
         return []
 
