@@ -98,7 +98,7 @@ Inside the app:
 | `Tab`           | Switch panel                        |
 | `Shift+Tab`     | Cycle desktop windows               |
 | `Alt+L / Alt+R` | Focus left / right panel            |
-| `Ctrl+P`        | Command palette                     |
+| `Ctrl+K`        | Command palette                     |
 
 Editor-scoped keys (Save, Find/Replace, Split, Fold, Record macro) appear in
 the status bar when an editor window has focus.

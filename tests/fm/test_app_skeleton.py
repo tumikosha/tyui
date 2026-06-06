@@ -1461,3 +1461,22 @@ async def test_apply_theme_invalidates_registry_cache(monkeypatch):
         app._apply_theme("nord")
         await pilot.pause()
         assert "nord" in calls
+
+
+@pytest.mark.asyncio
+async def test_command_palette_on_ctrl_k_not_ctrl_p():
+    """Textual's built-in ctrl+p palette is disabled; ours lives on Ctrl+K."""
+    app = TyuiApp(launch_mode="fm", initial_path="/tmp")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Built-in Textual palette is off, so no priority ctrl+p binding exists.
+        assert app.ENABLE_COMMAND_PALETTE is False
+        actions = {binding.action for _key, binding in app._bindings}
+        assert "command_palette" not in actions
+        assert "app.command_palette" not in actions
+        # Our own palette resolves on Ctrl+K via the dispatcher.
+        cmd = app.dispatcher.hotkey_lookup("ctrl+k")
+        assert cmd is not None and cmd.id == "palette.open"
+        # Ctrl+P no longer opens any palette — it's the panels-fullscreen key.
+        cmd_p = app.dispatcher.hotkey_lookup("ctrl+p")
+        assert cmd_p is not None and cmd_p.id == "panels.fullscreen"

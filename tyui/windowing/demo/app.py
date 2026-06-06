@@ -92,6 +92,10 @@ Press Esc to close this dialog.
 class WindowingDemo(App):
     TITLE = "tyui.windowing demo"
 
+    # Disable Textual's built-in command palette (priority ctrl+p binding) so
+    # it doesn't shadow our CommandRouter; the demo's own palette is on Ctrl+K.
+    ENABLE_COMMAND_PALETTE = False
+
     CSS = """
     Screen { background: $panel; }
     Desktop { margin-top: 1; margin-bottom: 1; }
@@ -191,7 +195,7 @@ class WindowingDemo(App):
             WindowCommand(id="demo.split_h", label="Split Horizontal", handler=self.action_split_h),
             WindowCommand(id="demo.split_v", label="Split Vertical", handler=self.action_split_v, hotkey="ctrl+alt+backslash"),
             WindowCommand(id="demo.toggle_macro", label="Record Macro", handler=self.action_toggle_macro, hotkey="alt+m"),
-            WindowCommand(id="palette.open", label="Command Palette", handler=self.action_open_palette, hotkey="ctrl+p"),
+            WindowCommand(id="palette.open", label="Command Palette", handler=self.action_open_palette, hotkey="ctrl+k"),
         ]
         self.command_registry.register_many(cmds)
 

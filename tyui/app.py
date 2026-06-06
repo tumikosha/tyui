@@ -230,6 +230,12 @@ class TyuiApp(App):
 
     TITLE = "tyui"
 
+    # Disable Textual's built-in command palette: it binds ctrl+p as a
+    # priority binding that pre-empts our CommandRouter, and it only lists
+    # generic Textual commands (no app providers registered). The app's own
+    # CommandPaletteContent (palette.open, Ctrl+K) is the real palette.
+    ENABLE_COMMAND_PALETTE = False
+
     CSS = """
     Screen { background: $panel; }
     Desktop { margin-top: 1; }
@@ -268,6 +274,15 @@ class TyuiApp(App):
         # the chord-style works everywhere, mirrors tmux/screen prefix
         # idiom.
         Binding("ctrl+w", "tray_chord_start", show=False, priority=True),
+        # The digit half of the chord. These are priority bindings so they
+        # fire BEFORE the focused widget (e.g. an editor in `we`-mode) can
+        # swallow the digit. check_action() keeps them disabled until a
+        # Ctrl+W set _tray_chord_pending, so normal digit typing passes
+        # straight through to the editor.
+        *[
+            Binding(str(d), f"tray_restore_digit({d})", show=False, priority=True)
+            for d in range(1, 10)
+        ],
     ]
 
     def __init__(
@@ -647,7 +662,8 @@ class TyuiApp(App):
             WindowCommand(id="window.maximize", label="Maximize", handler=lambda: m.maximize_focused(), hotkey="f5"),
             WindowCommand(id="panel.left.toggle", label="Toggle Left Panel", handler=lambda: self._toggle_panel("panel-left"), hotkey="ctrl+1"),
             WindowCommand(id="panel.right.toggle", label="Toggle Right Panel", handler=lambda: self._toggle_panel("panel-right"), hotkey="ctrl+2"),
-            WindowCommand(id="palette.open", label="Command Palette", handler=self.action_open_palette, hotkey="ctrl+p"),
+            WindowCommand(id="palette.open", label="Command Palette", handler=self.action_open_palette, hotkey="ctrl+k"),
+            WindowCommand(id="panels.fullscreen", label="Panels Fullscreen", handler=self.action_panels_fullscreen, hotkey="ctrl+p"),
             WindowCommand(
                 id="console.toggle",
                 label="Toggle console",
@@ -723,6 +739,45 @@ class TyuiApp(App):
         if self.dispatcher is None or self.desktop is None:
             return
         show_command_palette(self.desktop, self.dispatcher)
+
+    def action_panels_fullscreen(self) -> None:
+        """Ctrl+P (global): bring the two file panels back full-screen.
+
+        Minimizes any open editor/viewer/console windows to the IconTray
+        (preserving their state, restorable via Ctrl+W; the default console
+        also re-surfaces on the next command or Ctrl+O), exits Project View,
+        reveals both panels un-maximized, tiles them across the FULL Desktop,
+        and focuses the last-active panel. A no-op re-tile when already in the
+        panel layout.
+        """
+        if self._has_active_modal() or self.desktop is None:
+            return
+        # Exit Project View if active so panels return to a full 1/2 split.
+        self._restore_tree_view_mode()
+        self._project_tree_panel_id = None
+        # Stash editor/viewer/console windows in the tray so the panels can
+        # fill the WHOLE screen (otherwise the console reserves the bottom
+        # half in _tile_panels and the panels only get the top half).
+        for w in list(self.desktop.windows):
+            if isinstance(w.content, (EditorContent, ViewerContent, HexViewerContent, ConsoleContent)):
+                self.desktop.minimize_window(w)
+        # Reveal both panels un-maximized.
+        for panel_id in ("panel-left", "panel-right"):
+            try:
+                win = self.desktop.query_one(f"#{panel_id}", Window)
+            except Exception:
+                continue
+            win.maximized = False
+            if win not in self.desktop.windows:
+                self.desktop.show_window(win)
+        self._tile_panels()
+        # Focus the last-active panel, falling back to the left one.
+        target = self._last_focused_panel_window
+        if target is None or target not in self.desktop.windows:
+            target_id = "panel-left"
+        else:
+            target_id = target.id or "panel-left"
+        self._focus_panel(target_id)
 
     def _resolve_initial_theme(self) -> str:
         """Theme to paint on startup: the persisted one if still valid, else
@@ -1282,7 +1337,7 @@ class TyuiApp(App):
         # panels occupy the TOP portion and the console takes the BOTTOM.
         console_h = 0
         cwin = self._console_default_window
-        if cwin is not None and not cwin.maximized:
+        if cwin is not None and not cwin.maximized and cwin in self.desktop.windows:
             console_h = max(3, H // 2)
         panels_h = max(3, H - console_h)
         for i, win_id in enumerate(("panel-left", "panel-right")):
@@ -2111,7 +2166,9 @@ class TyuiApp(App):
         self._project_tree_panel_id = tree_id
         self._enter_tree_short_mode(tree_win.content)
         self._layout_project_view(tree_win=tree_win, editor_win=editor_win)
-        self.desktop.focus_window(editor_win)
+        # F2 from the editor jumps focus INTO the tree so the user can navigate
+        # the file listing immediately (the editor stays open on the right).
+        self.desktop.focus_window(tree_win)
 
     def _open_editor_window(self, path: Path, *, read_only: bool = False) -> None:
         if self.desktop is None:
@@ -2452,16 +2509,13 @@ class TyuiApp(App):
         message.stop()
 
     def on_key(self, event) -> None:
-        # Tray-restore chord: Ctrl+W set _tray_chord_pending; the very next
-        # keypress consumes the chord. Digits 1..9 restore that icon; any
-        # other key cancels the chord without acting.
+        # Tray-restore chord: Ctrl+W set _tray_chord_pending. Digits 1..9 are
+        # consumed earlier by the priority-bound action_tray_restore_digit
+        # (so a focused editor can't swallow them), which clears the flag.
+        # If a NON-digit key reaches us while pending, the chord wasn't
+        # completed -> cancel it and let the key be handled normally.
         if self._tray_chord_pending:
             self._tray_chord_pending = False
-            ch = getattr(event, "character", None)
-            if ch is not None and len(ch) == 1 and ch in "123456789":
-                self._restore_tray_at(int(ch) - 1)
-                event.stop()
-                return
             # Fall through: cancel and let the key be handled normally.
 
         # Far-style letter routing: typing a printable character while a file
@@ -2711,12 +2765,31 @@ class TyuiApp(App):
             return
         self._tray_chord_pending = True
 
+    def action_tray_restore_digit(self, n: int) -> None:
+        """Second half of the Ctrl+W chord: restore the Nth tray icon."""
+        self._tray_chord_pending = False
+        self._restore_tray_at(n - 1)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # The 1..9 digit bindings only exist to complete a Ctrl+W chord.
+        # Keep them disabled (None -> binding skipped, key falls through to
+        # the focused widget) unless a chord is actually pending, so typing
+        # digits into an editor / command line works normally.
+        if action == "tray_restore_digit":
+            return True if self._tray_chord_pending else None
+        return True
+
     # --- CommandLine message handlers -------------------------------------
 
     def on_command_line_submitted(self, event: CommandLine.Submitted) -> None:
         event.stop()
         if self.command_runner is None:
             return
+        # If the console was stashed by Ctrl+P (panels-fullscreen), bring it
+        # back so the command's output is visible, then keep the cmdline focused
+        # so the user can keep typing.
+        if self._ensure_console_visible():
+            self._focus_command_line()
         self.command_runner.execute(event.text, anonymous=event.anonymous)
 
     def on_command_line_cancel_requested(self, event: CommandLine.CancelRequested) -> None:
@@ -2833,6 +2906,25 @@ class TyuiApp(App):
         w.styles.width = W
         w.styles.height = h
 
+    def _ensure_console_visible(self) -> bool:
+        """Re-surface the default console window if it was stashed away.
+
+        After ``action_panels_fullscreen`` (Ctrl+P) the console is minimized to
+        the tray. Running a command or toggling the console must bring it back
+        into the visible split. No-op when the console is absent or already
+        visible. Restores the bottom-half split layout. Returns True when it
+        actually restored the console.
+        """
+        if self.desktop is None:
+            return False
+        win = self._console_default_window
+        if win is None or win in self.desktop.windows:
+            return False
+        self.desktop.show_window(win)
+        self._fit_console_window(win)
+        self._tile_panels()
+        return True
+
     def action_toggle_console(self) -> None:
         """Ctrl+O: create/maximize the default console, or restore it."""
         # Lazily create the console-default window if it doesn't exist yet.
@@ -2840,6 +2932,10 @@ class TyuiApp(App):
         win = self._console_default_window
         if win is None or self.manager is None or self.desktop is None:
             return
+        # If the console was stashed (e.g. by Ctrl+P panels-fullscreen), bring
+        # it back into the visible stack before toggling its maximize state.
+        if win not in self.desktop.windows:
+            self._ensure_console_visible()
         if win.maximized:
             self.manager.toggle_maximize(win)
             if self._pre_console_focus is not None:

@@ -1,4 +1,4 @@
-"""TV-style command palette (Ctrl+P).
+"""TV-style command palette (Ctrl+K).
 
 Modal popup that lists the commands available in the current context — i.e.
 ``CommandDispatcher.commands_for_focus()`` — with a substring filter and

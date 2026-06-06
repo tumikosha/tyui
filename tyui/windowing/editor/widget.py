@@ -6,6 +6,7 @@ import logging
 
 from textual import events
 from textual.binding import Binding
+from textual.geometry import Size
 from textual.message import Message
 from textual.reactive import reactive
 from textual.scroll_view import ScrollView
@@ -235,6 +236,11 @@ class EditorWidget(ScrollView):
         line_count = len(self._rendered_lines) if self._rendered_lines else self.buffer.line_count
         return len(str(line_count)) + 2
 
+    def _content_width(self) -> int:
+        """Visible content width, excluding any vertical scrollbar column."""
+        width = self.scrollable_content_region.width
+        return width if width > 0 else self.size.width
+
     def _rescan_folds(self) -> None:
         if self.fold_engine:
             old_collapsed = {
@@ -271,7 +277,13 @@ class EditorWidget(ScrollView):
             self._rendered_lines = list(self.buffer.lines)
             self._line_map = list(range(len(self._rendered_lines)))
         try:
-            self.virtual_size = self.size.with_height(len(self._rendered_lines))
+            # +1 leaves room for the past-EOL cursor marker; the gutter is
+            # rendered fixed (never scrolled) so it counts toward the width too.
+            longest = max((len(line) for line in self._rendered_lines), default=0)
+            content_width = longest + self._gutter_width() + 1
+            self.virtual_size = Size(
+                max(content_width, self.size.width), len(self._rendered_lines)
+            )
             self.refresh()
         except Exception:
             log.debug("Could not update virtual_size during render refresh", exc_info=True)
@@ -354,25 +366,35 @@ class EditorWidget(ScrollView):
         # then the optional trailing marker space. Plain columns carry ``base``
         # (the widget's theme style) so they render identically to the old plain
         # branch.
-        text = Text(style=base)
+        # The gutter (line numbers) stays pinned; only the body scrolls
+        # horizontally with ``scroll_offset.x``.
+        gutter_text = Text(style=base)
         if self.show_line_numbers:
             line_num = str(buf_row + 1).rjust(gutter - 1)
-            text.append(f"{line_num} ", style=self._rich_style("editor.line_numbers"))
+            gutter_text.append(f"{line_num} ", style=self._rich_style("editor.line_numbers"))
 
+        body_text = Text(style=base)
         i = 0
         while i < n:
             st = col_styles[i]
             j = i + 1
             while j < n and col_styles[j] == st:
                 j += 1
-            text.append(line[i:j], style=st)
+            body_text.append(line[i:j], style=st)
             i = j
 
         if cursor_at_eol or sel_spans_newline:
-            text.append(" ", style=col_styles[n])
+            body_text.append(" ", style=col_styles[n])
 
         try:
-            return Strip(text.render(self.app.console))
+            console = self.app.console
+            gutter_strip = Strip(gutter_text.render(console))
+            body_strip = Strip(body_text.render(console))
+            scroll_x = self.scroll_offset.x
+            body_width = max(0, self._content_width() - gutter)
+            body_strip = body_strip.crop(scroll_x, scroll_x + body_width)
+            body_strip = body_strip.adjust_cell_length(body_width, base)
+            return Strip.join([gutter_strip, body_strip])
         except Exception:
             log.debug("render_line failed for y=%d, returning blank strip", y, exc_info=True)
             return Strip.blank(self.size.width)
@@ -541,13 +563,32 @@ class EditorWidget(ScrollView):
             pass
         self._refresh_render()
         cursor_y = self._buffer_row_to_rendered_row(self.buffer.cursor_row)
+        cursor_x = self._buffer_col_to_rendered_col(
+            self.buffer.cursor_row, self.buffer.cursor_col
+        )
         try:
             visible_top = self.scroll_offset.y
             visible_bottom = visible_top + self.size.height - 2
+            target_y = None
             if cursor_y < visible_top:
-                self.scroll_to(y=cursor_y, animate=False)
+                target_y = cursor_y
             elif cursor_y > visible_bottom:
-                self.scroll_to(y=cursor_y - self.size.height + 2, animate=False)
+                target_y = cursor_y - self.size.height + 2
+
+            scroll_x = self.scroll_offset.x
+            body_width = max(1, self._content_width() - self._gutter_width())
+            target_x = None
+            if cursor_x < scroll_x:
+                target_x = cursor_x
+            elif cursor_x >= scroll_x + body_width:
+                target_x = cursor_x - body_width + 1
+
+            if target_x is not None or target_y is not None:
+                self.scroll_to(
+                    x=scroll_x if target_x is None else target_x,
+                    y=self.scroll_offset.y if target_y is None else target_y,
+                    animate=False,
+                )
         except NoActiveAppError:
             pass
 
@@ -834,7 +875,7 @@ class EditorWidget(ScrollView):
         rendered_row = y + self.scroll_offset.y
         rendered_row = max(0, min(rendered_row, len(self._rendered_lines) - 1))
         buf_row = self._rendered_row_to_buffer_row(rendered_row)
-        rendered_col = max(0, x - gutter)
+        rendered_col = max(0, x - gutter + self.scroll_offset.x)
         if rendered_row < len(self._rendered_lines):
             rendered_col = min(rendered_col, len(self._rendered_lines[rendered_row]))
         buf_col = self._rendered_col_to_buffer_col(buf_row, rendered_col)

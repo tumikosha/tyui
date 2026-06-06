@@ -188,6 +188,29 @@ async def test_f2_in_editor_reveals_left_tree(tmp_path):
         assert app._project_tree_panel_id == "panel-left"
 
 
+async def test_f2_in_editor_focuses_tree(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("a = 1\n")
+    app = TyuiApp(launch_mode="fm", initial_path=str(tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(pilot)
+        _focus_panel_on_file(app, "panel-left", f)
+        app.action_project_view()
+        await _settle(pilot)
+        editor = _editor_windows(app)[0]
+        app.desktop.focus_window(editor)
+        await _settle(pilot)
+        assert app.desktop.focused_window is editor
+
+        # F2 from the editor must jump focus INTO the tree panel.
+        app.action_project_view()
+        await _settle(pilot)
+
+        tree = app.desktop.query_one("#panel-left", Window)
+        assert app.desktop.focused_window is tree
+        assert app.focused is tree.content
+
+
 async def test_f2_in_editor_uses_remembered_tree_side(tmp_path):
     f1 = tmp_path / "a.py"
     f1.write_text("a = 1\n")

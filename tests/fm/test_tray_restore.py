@@ -104,6 +104,62 @@ async def test_chord_cancelled_by_non_digit(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_chord_restores_with_editor_focused_and_no_digit_leak(tmp_path: Path):
+    """In `we`-mode a sibling editor still holds focus when the chord fires.
+
+    Regression: the digit half of the chord must be intercepted at the app
+    level (priority binding) so the focused editor neither swallows it nor
+    has it typed into its buffer; the tray icon must still restore.
+    """
+    f1 = tmp_path / "a.txt"
+    f1.write_text("aaa")
+    f2 = tmp_path / "b.txt"
+    f2.write_text("bbb")
+    app = TyuiApp(launch_mode="we", initial_paths=[f1, f2])
+    async with app.run_test(size=(120, 30)) as pilot:
+        for _ in range(10):
+            await pilot.pause()
+        # Minimize the focused (top) editor; a sibling editor keeps focus.
+        top = app.desktop.focused_window
+        assert top is not None
+        app.desktop.minimize_window(top)
+        await pilot.pause()
+        focused = app.focused
+        assert hasattr(focused, "buffer"), "expected a focused editor widget"
+        before = list(focused.buffer.lines)
+        assert top in app.desktop.minimized_windows
+
+        await pilot.press("ctrl+w")
+        await pilot.pause()
+        assert app._tray_chord_pending is True
+        await pilot.press("1")
+        await pilot.pause()
+        await pilot.pause()
+
+        assert app._tray_chord_pending is False
+        assert top in app.desktop.windows, "tray icon was not restored"
+        assert list(focused.buffer.lines) == before, "the digit leaked into the editor"
+
+
+@pytest.mark.asyncio
+async def test_normal_digit_typing_unaffected_when_not_in_chord(tmp_path: Path):
+    """Digit bindings stay disabled unless a Ctrl+W chord is pending, so
+    typing a digit into an editor works as usual."""
+    f1 = tmp_path / "a.txt"
+    f1.write_text("x")
+    app = TyuiApp(launch_mode="we", initial_paths=[f1])
+    async with app.run_test(size=(120, 30)) as pilot:
+        for _ in range(10):
+            await pilot.pause()
+        focused = app.focused
+        assert hasattr(focused, "buffer")
+        assert app._tray_chord_pending is False
+        await pilot.press("7")
+        await pilot.pause()
+        assert any("7" in line for line in focused.buffer.lines)
+
+
+@pytest.mark.asyncio
 async def test_icon_tray_shows_hint_and_position_number(tmp_path: Path):
     f = tmp_path / "hello.txt"
     f.write_text("hi")
