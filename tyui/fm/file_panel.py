@@ -880,25 +880,28 @@ class FilePanel(WindowContent):
         focused: bool,
         entry=None,
     ) -> RichStyle:
-        # Active panel: cursor row inverts (reverse=True). Selected entries
-        # are yellow-bold. Inactive panel: cursor row is just bold so the
-        # user can see at a glance which panel is "live". All layered on the
-        # type-coloured themed base so the file-type fg shows on normal rows,
-        # the cursor reverses it, and selection's yellow overrides it.
-        base = self._entry_base_style(entry) if entry is not None else self._base_style()
+        # Normal rows carry the file-type foreground (``typed``). The focused
+        # cursor bar is built from the PLAIN themed base instead, so the
+        # reverse-video highlight looks identical on every file type — the
+        # type colour must not bleed into the cursor background. Selected
+        # entries are yellow-bold; the inactive-panel cursor is just bold
+        # (no reverse), so it can keep the type colour without changing the
+        # highlight.
+        typed = self._entry_base_style(entry) if entry is not None else self._base_style()
+        plain = self._base_style()
         if is_cursor and is_selected:
-            return base + RichStyle(
+            return plain + RichStyle(
                 color="yellow",
                 bold=True,
                 reverse=focused,
             )
         if is_cursor:
             if focused:
-                return base + RichStyle(reverse=True)
-            return base + RichStyle(bold=True)
+                return plain + RichStyle(reverse=True)
+            return typed + RichStyle(bold=True)
         if is_selected:
-            return base + RichStyle(color="yellow", bold=True)
-        return base
+            return typed + RichStyle(color="yellow", bold=True)
+        return typed
 
     # ------------------------------------------------------------------
     # Focus handling — repaint on focus/blur so the cursor-row style

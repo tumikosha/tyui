@@ -124,3 +124,17 @@ def test_row_style_cursor_reverses_type_row():
         is_cursor=True, is_selected=False, focused=True, entry=_entry("photo.png")
     )
     assert getattr(style, "reverse", False)
+
+
+def test_row_style_focused_cursor_is_uniform_across_types():
+    # The focused cursor highlight must look the same regardless of file type
+    # (no type colour bleeding into the reverse-video bar).
+    p = _panel_with_palette(modern_dark)
+    img = p._row_style(is_cursor=True, is_selected=False, focused=True, entry=_entry("photo.png"))
+    src = p._row_style(is_cursor=True, is_selected=False, focused=True, entry=_entry("main.py"))
+    d = p._row_style(is_cursor=True, is_selected=False, focused=True, entry=_entry("sub", is_dir=True))
+    assert str(img.color) == str(src.color) == str(d.color)
+    assert str(img.bgcolor) == str(src.bgcolor) == str(d.bgcolor)
+    # And it matches the plain themed base reversed (no type fg).
+    plain = p._base_style()
+    assert str(img.color) == str(plain.color)
