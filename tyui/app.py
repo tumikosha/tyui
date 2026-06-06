@@ -368,6 +368,9 @@ class TyuiApp(App):
         hist_path = Path.home() / ".config" / "tyui" / "history"
         self.command_history = History(hist_path, cap=1000)
         self.command_line = CommandLine(id="cmdline", history=self.command_history)
+        # While file panels are visible, up/down at the cmdline buffer edge
+        # drive the active panel instead of command history (NC/Far style).
+        self.command_line.set_panel_nav(self._cmdline_panel_nav)
         self.status_bar = StatusBar(items=self._panel_status_items())
         yield self.menu_bar
         yield self.desktop
@@ -1556,6 +1559,42 @@ class TyuiApp(App):
             if isinstance(win.content, FilePanel) and win.content is not active:
                 return win.content
         return None
+
+    def _panels_visible(self) -> bool:
+        """True if either file panel is currently on the visible window stack.
+
+        Hidden panels (editor/cli launch modes, close-box, Alt+F1/F2 toggle)
+        live in ``desktop.hidden_windows``; a visible panel is in
+        ``desktop.windows``. Drives whether cmdline up/down navigates the
+        panel (panels visible) or command history (console-only).
+        """
+        if self.desktop is None:
+            return False
+        visible_ids = {w.id for w in self.desktop.windows}
+        return "panel-left" in visible_ids or "panel-right" in visible_ids
+
+    def _cmdline_panel_nav(self, direction: int) -> bool:
+        """Divert a cmdline boundary up/down to the active file panel.
+
+        Returns True when the key was consumed (panel cursor moved); False
+        lets the CommandLine fall back to command-history navigation. Moves
+        focus onto the panel so Enter/F-keys act on it natively — the
+        existing Far-style letter routing bounces focus back to the cmdline
+        on the next typed character.
+        """
+        if not self._panels_visible():
+            return False
+        panel = self._active_panel()
+        if panel is None:
+            return False
+        win = panel.parent
+        while win is not None and not isinstance(win, Window):
+            win = getattr(win, "parent", None)
+        if win is None or win.id not in ("panel-left", "panel-right"):
+            return False
+        self._focus_panel(win.id)
+        panel.move_cursor(direction)
+        return True
 
     def _close_modal(self, dialog) -> None:
         """Close the ModalWindow enclosing `dialog`. Restores panel focus.

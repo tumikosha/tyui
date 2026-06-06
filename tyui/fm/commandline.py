@@ -154,7 +154,11 @@ class _CmdInput(TextArea):
     def action_cmd_up(self) -> None:
         row, _col = self.cursor_location
         if row == 0:
-            self._owner.history_prev()
+            # At the top of the buffer: if file panels are visible the app
+            # consumes up/down to drive the active panel's cursor; otherwise
+            # (console-only / editor / cli modes) navigate command history.
+            if not self._owner._route_nav(-1):
+                self._owner.history_prev()
         else:
             self.action_cursor_up()
 
@@ -162,7 +166,8 @@ class _CmdInput(TextArea):
         row, _col = self.cursor_location
         last = max(0, self.document.line_count - 1)
         if row >= last:
-            self._owner.history_next()
+            if not self._owner._route_nav(1):
+                self._owner.history_next()
         else:
             self.action_cursor_down()
 
@@ -221,6 +226,11 @@ class CommandLine(Container):
         self._input = _CmdInput(self, id="cmdline-input")
         self._history = history
         self._subscribers: list[Callable[[CommandLine.Submitted], None]] = []
+        # Optional app-supplied hook: given a direction (-1 up / +1 down) it
+        # routes up/down to the active file panel and returns True when it
+        # consumed the key. When it returns False (or is unset) the cmdline
+        # falls back to command-history navigation. See app._cmdline_panel_nav.
+        self._panel_nav: Callable[[int], bool] | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal():
@@ -237,6 +247,16 @@ class CommandLine(Container):
     def subscribe(self, fn: Callable[["CommandLine.Submitted"], None]) -> None:
         """Used by tests to receive submissions without going through Textual messaging."""
         self._subscribers.append(fn)
+
+    def set_panel_nav(self, fn: Callable[[int], bool] | None) -> None:
+        """Install the app hook that diverts boundary up/down to a file panel."""
+        self._panel_nav = fn
+
+    def _route_nav(self, direction: int) -> bool:
+        """Return True if the app consumed this up/down (panel-cursor move)."""
+        if self._panel_nav is None:
+            return False
+        return bool(self._panel_nav(direction))
 
     def history_prev(self) -> None:
         if self._history is None:
