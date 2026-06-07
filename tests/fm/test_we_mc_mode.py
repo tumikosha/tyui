@@ -90,6 +90,20 @@ async def test_we_mc_ctrl_o_shows_command_screen(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_fm_ctrl_o_shows_command_screen(tmp_path):
+    # fm mode Ctrl+O drops into the mc-style command screen too: every typed
+    # command already routes through the handover, so the old embedded console
+    # window would just be empty. Ctrl+O should match we-mc behaviour.
+    app = TyuiApp(launch_mode="fm", terminal_mode="suspend")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        spy = _SpyHandover()
+        app._handover = spy
+        app.action_toggle_console()
+        assert spy.screens == 1
+
+
+@pytest.mark.asyncio
 async def test_we_mc_shutdown_called_on_unmount(tmp_path):
     app = TyuiApp(launch_mode="we-mc", terminal_mode="suspend")
     async with app.run_test() as pilot:

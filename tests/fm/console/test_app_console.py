@@ -29,13 +29,3 @@ async def test_named_target_creates_console_window(tmp_path):
             if target is not None and not target.busy:
                 break
         assert app.console_registry.get("console-build") is not None
-
-
-@pytest.mark.asyncio
-async def test_ctrl_o_creates_default_console(tmp_path):
-    app = TyuiApp(launch_mode="fm", initial_path=tmp_path)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        app.action_toggle_console()
-        await pilot.pause()
-        assert app.console_registry.get("console-default") is not None

@@ -48,7 +48,10 @@ async def test_mouse_wheel_scrolls_buffer(tmp_path):
     from textual import events
     from tyui.app import TyuiApp
 
-    app = TyuiApp(launch_mode="fm", initial_path=tmp_path)
+    # Use a non-panel launch mode (cli): in fm/we-mc Ctrl+O now drops into the
+    # mc-style command screen, while editor/cli still toggle the embedded
+    # console window this test exercises.
+    app = TyuiApp(launch_mode="cli", initial_path=tmp_path)
     async with app.run_test(size=(80, 30)) as pilot:
         await pilot.pause()
         await pilot.pause()

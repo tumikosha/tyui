@@ -5,65 +5,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from tyui.fm.console.handover import SubprocessHandover, scan_sentinel
-
-
-def test_scan_sentinel_no_marker_holds_back_tail():
-    buf = bytearray(b"hello world")  # 11 bytes, < tail
-    emit, rc, rest = scan_sentinel(buf, tail=64)
-    assert emit == b""
-    assert rc is None
-    assert bytes(rest) == b"hello world"
-
-
-def test_scan_sentinel_emits_all_but_tail_when_long():
-    buf = bytearray(b"x" * 100)
-    emit, rc, rest = scan_sentinel(buf, tail=64)
-    assert emit == b"x" * 36
-    assert rc is None
-    assert rest == bytearray(b"x" * 64)
-
-
-def test_scan_sentinel_finds_marker_and_extracts_rc():
-    buf = bytearray(b"output here\nTYUI_END_abc123_0\nleftover")
-    emit, rc, rest = scan_sentinel(buf, tail=64)
-    assert emit == b"output here\n"
-    assert rc == 0
-    assert bytes(rest) == b"leftover"
-
-
-def test_scan_sentinel_negative_rc():
-    buf = bytearray(b"TYUI_END_deadbeef_-1\n")
-    emit, rc, rest = scan_sentinel(buf, tail=64)
-    assert emit == b""
-    assert rc == -1
-
-
-def test_scan_sentinel_ignores_unexpanded_echo_line():
-    # The echoed command `echo "TYUI_END_t_$?"` must NOT match (the `$?` is
-    # not digits), only the real expanded output does.
-    buf = bytearray(b'echo "TYUI_END_t_$?"\nTYUI_END_t_0\n')
-    emit, rc, rest = scan_sentinel(buf, tail=64)
-    assert rc == 0
-    assert b'echo "TYUI_END_t_$?"' in emit
-
-
-def test_scan_sentinel_crlf_line_ending():
-    # PTYs on POSIX in raw mode produce \r\n; the regex must accept it.
-    buf = bytearray(b"output\r\nTYUI_END_tok5_42\r\nleftover")
-    emit, rc, rest = scan_sentinel(buf, tail=64)
-    assert emit == b"output\r\n"
-    assert rc == 42
-    assert bytes(rest) == b"leftover"
-
-
-def test_scan_sentinel_exact_tail_boundary_holds_all():
-    # When len(buf) == tail the entire buffer must be held back (<=, not <).
-    buf = bytearray(b"x" * 64)
-    emit, rc, rest = scan_sentinel(buf, tail=64)
-    assert emit == b""
-    assert rc is None
-    assert rest == bytearray(b"x" * 64)
+from tyui.fm.console.handover import SubprocessHandover
 
 
 class _FakeApp:
@@ -131,26 +73,54 @@ def test_make_handover_posix_tty_picks_relay(monkeypatch):
     assert isinstance(h, RelayHandover)
 
 
-def test_relay_pump_emits_output_and_stops_at_sentinel():
+def test_relay_pump_forwards_output_verbatim_and_stops_on_fifo():
     h = RelayHandover(_FakeApp())
+    fr, fw = os.pipe()          # stand-in FIFO
+    h._fifo_fd = fr
+    h._fifo_buf = b""
     master, slave = os.openpty()
     try:
-        os.write(slave, b"hello\nTYUI_END_deadbeef_0\nignored-after")
+        os.write(slave, b"hello world output")
+        os.write(fw, b"0\n")    # completion marker on the side channel
         out = io.BytesIO()
-        # No input fds -> pump only forwards master->out until the sentinel.
         rc = h._pump([], master, out)
         assert rc == 0
-        assert b"hello" in out.getvalue()
-        assert b"ignored-after" not in out.getvalue()
+        assert out.getvalue() == b"hello world output"
     finally:
+        os.close(fr)
+        os.close(fw)
         os.close(master)
         os.close(slave)
 
 
-def test_relay_sends_only_command_no_sentinel():
-    # Regression: the per-command PTY write must carry ONLY the command — never
-    # an appended sentinel. (The old code wrote `cmd\necho "TYUI_END..."\n`,
-    # which an interactive child like htop consumed as keystrokes.)
+def test_relay_pump_does_not_hold_back_small_bursts():
+    # Regression for the kitty bug: a <64-byte burst with no in-band sentinel
+    # must reach the terminal, not sit in a holdback buffer.
+    h = RelayHandover(_FakeApp())
+    fr, fw = os.pipe()
+    h._fifo_fd = fr
+    h._fifo_buf = b""
+    master, slave = os.openpty()
+    try:
+        os.write(slave, b"\x1b[?u")   # 4-byte kitty query, well under 64
+        os.write(fw, b"0\n")
+        out = io.BytesIO()
+        rc = h._pump([], master, out)
+        assert rc == 0
+        assert out.getvalue() == b"\x1b[?u"  # forwarded, not held back
+    finally:
+        os.close(fr)
+        os.close(fw)
+        os.close(master)
+        os.close(slave)
+
+
+def test_relay_send_command_cds_to_cwd_and_carries_no_sentinel():
+    # The per-command PTY write must (1) cd to the active panel dir so the
+    # persistent shell tracks it, and (2) carry NO in-band sentinel — an
+    # interactive child like htop would otherwise eat queued sentinel bytes.
+    from pathlib import Path
+
     h = RelayHandover(_FakeApp())
 
     class _CapturingProc:
@@ -158,22 +128,23 @@ def test_relay_sends_only_command_no_sentinel():
             self.last = data
 
     h._proc = _CapturingProc()
-    h._send_command("htop")
-    assert h._proc.last == b"htop\n"
-    assert b"TYUI_END" not in h._proc.last
-    assert b"echo" not in h._proc.last
+    h._send_command("htop", Path("/tmp/some dir"))
+    text = h._proc.last.decode()
+    assert text.endswith("htop\n")
+    assert "cd " in text
+    assert "'/tmp/some dir'" in text  # shlex-quoted path
+    assert "TYUI_END" not in text
 
 
-def test_prompt_hook_setup_emits_matchable_marker():
-    # The marker the hook prints must be recognised by _END_RE, for each shell.
-    from tyui.fm.console.handover import _END_RE, _prompt_hook_setup
+def test_prompt_hook_setup_writes_rc_to_fifo():
+    from tyui.fm.console.handover import _prompt_hook_setup
 
+    fifo = "/tmp/tyui-test.fifo"
     for shell in ("zsh", "bash", "sh", "fish-unknown"):
-        setup = _prompt_hook_setup(shell, "deadbeef0000")
-        assert "TYUI_END_deadbeef0000_" in setup
-        # Simulate what the hook prints at a prompt with rc=0.
-        printed = b"\nTYUI_END_deadbeef0000_0\n"
-        assert _END_RE.search(printed) is not None
+        setup = _prompt_hook_setup(shell, fifo)
+        assert fifo in setup          # the marker is routed to the FIFO path
+        assert "printf" in setup
+        assert "TYUI_END" not in setup  # no in-band stdout sentinel anymore
 
 
 def test_subprocess_command_screen_delegates_to_relay_on_posix_tty(
@@ -225,17 +196,18 @@ def test_relay_runs_real_command(tmp_path):
         raise TimeoutError("relay pump hung (prompt hook never fired)")
 
     h = RelayHandover(_FakeApp())
-    h._ensure_shell(tmp_path)  # installs the prompt hook + drains startup
+    h._ensure_shell(tmp_path)  # creates FIFO, installs hook, drains startup
+    assert h._fifo_fd >= 0
     old = signal.signal(signal.SIGALRM, _alarm)
     signal.alarm(10)
     try:
         out = io.BytesIO()
-        # ONLY the command — completion is detected via the installed prompt
-        # hook, not a fed-in sentinel.
-        h._send_command("echo marker-hi")
+        # Completion is detected via the FIFO marker, not a fed-in sentinel.
+        h._send_command("echo marker-hi", tmp_path)
         rc = h._pump([], h._proc.fd, out)
         assert rc == 0
         assert b"marker-hi" in out.getvalue()
+        assert b"TYUI_END" not in out.getvalue()  # no marker leaks to stdout
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old)
@@ -266,39 +238,102 @@ def test_interactive_relay_exits_on_toggle_and_forwards_prefix():
         os.close(stdin_w)
 
 
-def test_interactive_relay_strips_markers_does_not_exit_on_them():
-    # A completion marker in the shell output is stripped from the view and is
-    # NOT treated as an exit (we leave only on the toggle / stdin EOF).
-    h = RelayHandover(_FakeApp())
-    master, slave = os.openpty()
-    stdin_r, stdin_w = os.pipe()
-    try:
-        os.write(slave, b"out\nTYUI_END_deadbeef_0\n")
-        os.close(stdin_w)  # stdin EOF -> relay returns (after draining master)
-        out = io.BytesIO()
-        h._interactive_relay(stdin_r, master, out)
-        assert b"out" in out.getvalue()
-        assert b"TYUI_END" not in out.getvalue()
-    finally:
-        os.close(master)
-        os.close(slave)
-        os.close(stdin_r)
-
-
 def test_relay_pump_handles_input_fd_eof():
-    # An input fd at EOF must not cause a spin; the pump still completes via
-    # the master sentinel without hanging.
     h = RelayHandover(_FakeApp())
+    fr, fw = os.pipe()
+    h._fifo_fd = fr
+    h._fifo_buf = b""
     r, w = os.pipe()
     os.close(w)  # r is now at EOF (select-readable, read returns b"")
     master, slave = os.openpty()
     try:
-        os.write(slave, b"out\nTYUI_END_deadbeef_0\n")
+        os.write(slave, b"out")
+        os.write(fw, b"0\n")
         out = io.BytesIO()
         rc = h._pump([r], master, out)
         assert rc == 0
         assert b"out" in out.getvalue()
     finally:
+        os.close(fr)
+        os.close(fw)
         os.close(r)
         os.close(master)
         os.close(slave)
+
+
+def test_interactive_relay_consumes_fifo_markers_without_exiting():
+    # Completion markers now arrive on the FIFO; they must be consumed (so the
+    # fd stops being readable) and must NOT cause an exit — we leave only on the
+    # Ctrl+O toggle or stdin EOF. The visible stream is forwarded verbatim.
+    h = RelayHandover(_FakeApp())
+    fr, fw = os.pipe()
+    h._fifo_fd = fr
+    h._fifo_buf = b""
+    master, slave = os.openpty()
+    stdin_r, stdin_w = os.pipe()
+    try:
+        os.write(slave, b"out")
+        os.write(fw, b"0\n")        # a completion marker; must not exit
+        os.close(stdin_w)           # stdin EOF -> relay returns
+        out = io.BytesIO()
+        h._interactive_relay(stdin_r, master, out)
+        assert b"out" in out.getvalue()
+        assert b"TYUI_END" not in out.getvalue()
+    finally:
+        os.close(fr)
+        os.close(fw)
+        os.close(master)
+        os.close(slave)
+        os.close(stdin_r)
+
+
+def test_read_rc_from_fifo_parses_latest_complete_line():
+    h = RelayHandover(_FakeApp())
+    r, w = os.pipe()
+    h._fifo_fd = r
+    h._fifo_buf = b""
+    try:
+        os.write(w, b"0\n")
+        assert h._read_rc_from_fifo() == 0
+        os.write(w, b"7\n42\n")  # two markers in one read -> latest wins
+        assert h._read_rc_from_fifo() == 42
+    finally:
+        os.close(r)
+        os.close(w)
+
+
+def test_read_rc_from_fifo_holds_partial_line():
+    h = RelayHandover(_FakeApp())
+    r, w = os.pipe()
+    h._fifo_fd = r
+    h._fifo_buf = b""
+    try:
+        os.write(w, b"13")          # no newline yet
+        assert h._read_rc_from_fifo() is None
+        os.write(w, b"\n")          # completes the line
+        assert h._read_rc_from_fifo() == 13
+    finally:
+        os.close(r)
+        os.close(w)
+
+
+def test_open_fifo_creates_readable_fifo_and_shutdown_cleans_up():
+    h = RelayHandover(_FakeApp())
+    h._open_fifo()
+    try:
+        assert h._fifo_path is not None
+        assert h._fifo_path.exists()
+        assert h._fifo_fd >= 0
+        # A writer using the path delivers an rc to the reader.
+        wfd = os.open(str(h._fifo_path), os.O_WRONLY)
+        try:
+            os.write(wfd, b"5\n")
+        finally:
+            os.close(wfd)
+        assert h._read_rc_from_fifo() == 5
+    finally:
+        path = h._fifo_path
+        h.shutdown()
+        assert h._fifo_fd == -1
+        assert h._fifo_path is None
+        assert not path.exists()

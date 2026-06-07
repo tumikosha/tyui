@@ -3199,8 +3199,15 @@ class TyuiApp(App):
         return True
 
     def action_toggle_console(self) -> None:
-        """Ctrl+O: we-mc shows the command screen; otherwise toggle console."""
-        if self.launch_mode == "we-mc":
+        """Ctrl+O: panel layouts drop into the mc-style command screen; other
+        modes toggle the embedded console window.
+
+        Every typed command already runs through the handover (full-screen,
+        real tty), so in fm/we-mc the embedded console window would only ever be
+        empty — Ctrl+O there hands the real terminal to the live subshell
+        instead, matching Midnight Commander.
+        """
+        if self._is_panel_mode():
             handover = self._ensure_handover()
             if handover is not None:
                 handover.command_screen(self._panel_cwd_for_test())

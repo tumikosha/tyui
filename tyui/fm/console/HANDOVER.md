@@ -1,5 +1,15 @@
 # Terminal handover: `relay` vs `suspend` (and why full-screen TUIs differ)
 
+> **UPDATE (2026-06-07):** `relay` now hosts full-screen / kitty-protocol TUIs
+> correctly (claude `Shift+Enter` works) while keeping its persistent subshell.
+> The fix moved command-completion detection off the program's stdout stream
+> onto a dedicated **FIFO side-channel** (mc-style), so the byte bridge forwards
+> **verbatim** — no scanning, no 64-byte holdback. The real root cause was the
+> holdback in `scan_sentinel`, not the nested PTY itself (see "Root cause"
+> below, now superseded). "Possible future fix #1" is **DONE**. See
+> `docs/superpowers/specs/2026-06-07-relay-kitty-transparent-handover-design.md`
+> and the matching plan. The sections below are kept for historical context.
+
 ## Symptom
 
 Running a full-screen TUI program from tyui's command line — most notably
