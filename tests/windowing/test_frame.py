@@ -183,3 +183,31 @@ class TestEffectiveBorder:
 
     def test_unfocused(self):
         assert effective_border(False, BorderStyle.DOUBLE, BorderStyle.SINGLE) == BorderStyle.SINGLE
+
+
+class TestCopyBox:
+    def test_render_top_includes_copy_box_after_close(self):
+        out = render_top(
+            40, BorderStyle.SINGLE, BorderSides.all(),
+            TitleSpec("/path", align="left"),
+            Decorations(close_box=True, copy_box=True),
+        )
+        assert "[■][⧉]" in out
+        assert out.index("[■]") < out.index("[⧉]")
+
+    def test_render_top_no_copy_box_when_disabled(self):
+        out = render_top(
+            40, BorderStyle.SINGLE, BorderSides.all(),
+            TitleSpec("/path", align="left"),
+            Decorations(close_box=True, copy_box=False),
+        )
+        assert "[⧉]" not in out
+
+    def test_copy_box_alone_at_left(self):
+        out = render_top(
+            40, BorderStyle.SINGLE, BorderSides.all(),
+            TitleSpec("/path", align="left"),
+            Decorations(close_box=False, copy_box=True),
+        )
+        assert "[⧉]" in out
+        assert "[■]" not in out

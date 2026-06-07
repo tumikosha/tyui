@@ -172,6 +172,22 @@ class _CmdInput(TextArea):
             self.action_cursor_down()
 
 
+class _RunModeChip(Static):
+    """Clickable chip showing the current run mode; click toggles it.
+
+    Lives next to the command line. The app owns the actual mode state and the
+    label text — the chip just reports a click so the app can flip it.
+    """
+
+    def __init__(self, owner: "CommandLine") -> None:
+        super().__init__("", classes="cmdline-mode")
+        self._owner = owner
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self._owner.post_message(CommandLine.RunModeToggleRequested())
+
+
 class CommandLine(Container):
     """Multi-line shell input with soft wrap, dynamic height, and history."""
 
@@ -188,6 +204,17 @@ class CommandLine(Container):
         padding: 0 1;
         color: $text-muted;
         background: $surface;
+    }}
+    CommandLine Static.cmdline-mode {{
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        color: $text;
+        background: $panel;
+        text-style: bold;
+    }}
+    CommandLine Static.cmdline-mode:hover {{
+        background: $accent;
     }}
     CommandLine TextArea {{
         border: none;
@@ -220,10 +247,16 @@ class CommandLine(Container):
     class KillRequested(Message):
         """Posted on Ctrl+\\ — app force-kills the running child."""
 
+    class RunModeToggleRequested(Message):
+        """Posted when the user clicks the run-mode chip — app flips the
+        terminal handover mode (relay ↔ suspend)."""
+
     def __init__(self, id: str | None = None, *, history: History | None = None) -> None:
         super().__init__(id=id)
         self._hint = Static("[Alt+C]", classes="cmdline-hint")
         self._input = _CmdInput(self, id="cmdline-input")
+        self._mode_chip = _RunModeChip(self)
+        self._mode_chip.display = False  # shown once the app sets a label
         self._history = history
         self._subscribers: list[Callable[[CommandLine.Submitted], None]] = []
         # Optional app-supplied hook: given a direction (-1 up / +1 down) it
@@ -236,6 +269,18 @@ class CommandLine(Container):
         with Horizontal():
             yield self._hint
             yield self._input
+            yield self._mode_chip
+
+    def set_run_mode(self, label: str, *, tooltip: str | None = None) -> None:
+        """Set the run-mode chip text (and tooltip). Called by the app to
+        reflect the current terminal handover mode. Passing an empty label
+        hides the chip."""
+        if not label:
+            self._mode_chip.display = False
+            return
+        self._mode_chip.update(label)
+        self._mode_chip.tooltip = tooltip
+        self._mode_chip.display = True
 
     @property
     def text(self) -> str:
@@ -243,6 +288,10 @@ class CommandLine(Container):
 
     def set_text(self, value: str) -> None:
         self._input.value = value
+
+    def insert_at_cursor(self, text: str) -> None:
+        """Insert text at the command-line cursor; the cursor ends after it."""
+        self._input.insert(text)
 
     def subscribe(self, fn: Callable[["CommandLine.Submitted"], None]) -> None:
         """Used by tests to receive submissions without going through Textual messaging."""

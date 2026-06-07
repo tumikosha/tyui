@@ -101,6 +101,11 @@ class Window(Container):
             self.window = window
             super().__init__()
 
+    class CopyBoxClicked(Message):
+        def __init__(self, window: "Window") -> None:
+            self.window = window
+            super().__init__()
+
     class FocusRequested(Message):
         def __init__(self, window: "Window") -> None:
             self.window = window
@@ -370,6 +375,10 @@ class Window(Container):
             # Close box at positions [1..3] if decoration is on and left side is on.
             if deco.close_box and sides.left and 1 <= x <= 3:
                 return "close_box"
+            if deco.copy_box and sides.left:
+                base = 4 if deco.close_box else 1
+                if base <= x <= base + 2:
+                    return "copy_box"
             if sides.right:
                 # Right-side decorations stacked from the right edge inward:
                 # zoom_box (rightmost), then minimize_box to its left.
@@ -434,6 +443,10 @@ class Window(Container):
             return
         if target == "minimize_box":
             self.post_message(Window.Minimized(self))
+            event.stop()
+            return
+        if target == "copy_box":
+            self.post_message(Window.CopyBoxClicked(self))
             event.stop()
             return
 

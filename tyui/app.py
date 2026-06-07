@@ -12,6 +12,8 @@ Later phases will: wire commands, file ops, real editor/agent content, etc.
 
 from __future__ import annotations
 
+import os
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
@@ -37,6 +39,7 @@ import tyui.fm.console.backends.subprocess_be as _subprocess_be  # noqa: F401 �
 import tyui.fm.console.backends.pty_be  # noqa: F401 — registers "pty" on POSIX
 from tyui.fm.console.history import History
 from tyui.fm.console.registry import ConsoleRegistry
+from tyui.fm.console.handover import TerminalHandover, make_handover
 from tyui.fm.console.runner import CommandRunner
 from tyui.fm.console.window import ConsoleContent
 from tyui.fm.dialogs import (
@@ -82,6 +85,7 @@ from tyui.windowing import (
     show_modal,
 )
 from tyui.windowing.content import WindowContent
+from tyui.windowing.core.buffer import _copy_to_system
 from tyui.windowing.editor.language_picker import show_language_picker
 from tyui.fm.hex_viewer import HexViewerContent, HexViewerWidget
 from tyui.fm.key_probe import KeyProbeContent
@@ -199,7 +203,21 @@ class CancelSearchRequest:
     content: SearchResultsContent
 
 
-LaunchMode = Literal["fm", "editor", "cli", "we"]
+LaunchMode = Literal["fm", "editor", "cli", "we", "we-mc"]
+TerminalMode = Literal["relay", "suspend"]
+
+# Files with one of these extensions are treated as runnable scripts even when
+# they lack the executable bit and a shebang; the value is the interpreter we
+# prefix the path with. Mirrors the mc "extension file" convention loosely.
+_SCRIPT_INTERPRETERS: dict[str, str] = {
+    ".sh": "sh",
+    ".bash": "bash",
+    ".zsh": "zsh",
+    ".py": "python3",
+    ".pl": "perl",
+    ".rb": "ruby",
+    ".js": "node",
+}
 
 # `we`-mode cascade geometry: each successive editor window is shifted by
 # (_WE_CASCADE_DX, _WE_CASCADE_DY); all windows share one shrunk size so the
@@ -266,6 +284,7 @@ class TyuiApp(App):
         Binding("alt+l", "focus_left_panel", "Left panel", show=False),
         Binding("alt+r", "focus_right_panel", "Right panel", show=False),
         Binding("alt+c", "focus_command_line", "Command line", show=False, priority=True),
+        Binding("ctrl+n", "insert_current_file", "Insert file name/path", show=False),
         # IconTray restore: Ctrl+W is a chord prefix; the next 1..9 keypress
         # restores the corresponding tray icon. Priority so it fires even
         # when an editor / Input has focus. Ctrl-digit alone doesn't work
@@ -291,6 +310,7 @@ class TyuiApp(App):
         launch_mode: LaunchMode = "fm",
         initial_path: str | Path | None = None,
         initial_paths: list[str | Path] | None = None,
+        terminal_mode: TerminalMode = "relay",
     ) -> None:
         super().__init__()
         # Drop Textual's built-in priority ctrl+q→quit binding so the key is
@@ -304,6 +324,9 @@ class TyuiApp(App):
         self.initial_paths: list[Path] = [
             Path(p).expanduser() for p in (initial_paths or [])
         ]
+        self.terminal_mode: TerminalMode = terminal_mode
+        # The active terminal-handover strategy in we-mc mode (None otherwise).
+        self._handover = None
         self.desktop: Desktop | None = None
         self.menu_bar: MenuBar | None = None
         self.status_bar: StatusBar | None = None
@@ -371,6 +394,8 @@ class TyuiApp(App):
         # While file panels are visible, up/down at the cmdline buffer edge
         # drive the active panel instead of command history (NC/Far style).
         self.command_line.set_panel_nav(self._cmdline_panel_nav)
+        label, tip = self._run_mode_chip()
+        self.command_line.set_run_mode(label, tooltip=tip)
         self.status_bar = StatusBar(items=self._panel_status_items())
         yield self.menu_bar
         yield self.desktop
@@ -417,7 +442,7 @@ class TyuiApp(App):
         self._build_menus()
         self._mount_initial_windows()
         self._refresh_panels()
-        if self.launch_mode == "fm":
+        if self._is_panel_mode():
             # Start with only the panels + command line visible; the console
             # is mounted lazily on the first command (or via Toggle console),
             # so the bottom half stays clear until the user needs it.
@@ -441,6 +466,15 @@ class TyuiApp(App):
         # math early-returns. call_after_refresh fires once Textual has
         # propagated the real terminal size to children.
         self.call_after_refresh(self._apply_default_layout)
+
+    def on_unmount(self) -> None:
+        # Tear down the we-mc terminal handover so its persistent PTY shell
+        # (relay mode) doesn't leak when the app exits.
+        if self._handover is not None:
+            try:
+                self._handover.shutdown()
+            except Exception:
+                pass
 
     def on_confirm_dialog_result(self, event: ConfirmDialog.Result) -> None:
         ctx = event.dialog.context
@@ -1167,6 +1201,10 @@ class TyuiApp(App):
         self._pre_menu_window = win
         self._pre_menu_focus = None
 
+    def _is_panel_mode(self) -> bool:
+        """True for layouts that show the two FM panels (fm + we-mc)."""
+        return self.launch_mode in ("fm", "we-mc")
+
     def _panel_cwd(self) -> Path:
         if self.initial_path is not None:
             return self.initial_path if self.initial_path.is_dir() else self.initial_path.parent
@@ -1176,8 +1214,10 @@ class TyuiApp(App):
         assert self.desktop is not None
         cwd = self._panel_cwd()
 
-        if self.launch_mode == "fm":
+        if self.launch_mode in ("fm", "we-mc"):
             self._add_panel_windows(cwd, visible=True)
+            if self.launch_mode == "we-mc":
+                self._handover = make_handover(self, self.terminal_mode)
             return
 
         if self.launch_mode == "editor":
@@ -1294,12 +1334,12 @@ class TyuiApp(App):
         assert self.desktop is not None
         left = make_window(
             FilePanel(cwd=cwd), title=str(cwd), position=(0, 0), size=(40, 12),
-            decorations=Decorations(close_box=True),
+            decorations=Decorations(close_box=True, copy_box=True),
             id="panel-left",
         )
         right = make_window(
             FilePanel(cwd=cwd), title=str(cwd), position=(40, 0), size=(40, 12),
-            decorations=Decorations(close_box=True),
+            decorations=Decorations(close_box=True, copy_box=True),
             id="panel-right",
         )
         # Closing a panel (close box or Left/Right > Hide) hides it instead of
@@ -1314,7 +1354,7 @@ class TyuiApp(App):
 
     def _apply_default_layout(self) -> None:
         assert self.desktop is not None and self.manager is not None
-        if self.launch_mode != "fm":
+        if not self._is_panel_mode():
             return
         if self._project_tree_panel_id is not None:
             self._relayout_project_view()
@@ -1608,7 +1648,7 @@ class TyuiApp(App):
             win_node = getattr(win_node, "parent", None)
         if win_node is not None and self.desktop is not None:
             self.desktop.remove_window(win_node)
-        if self.launch_mode == "fm":
+        if self._is_panel_mode():
             target = self._pre_modal_panel_id or "panel-left"
             # Don't clear _pre_modal_panel_id here: a single action may chain
             # modals (Confirm -> Progress) and the chained close still needs
@@ -2281,12 +2321,140 @@ class TyuiApp(App):
     def on_file_panel_item_activated(
         self, event: FilePanel.ItemActivated
     ) -> None:
-        # Phase 4: Enter on a file opens the editor. Directories are
-        # handled inside FilePanel.activate() (cwd change), so we only
-        # see ItemActivated for non-dir entries.
+        # Enter / double-click on a file. Directories are handled inside
+        # FilePanel.activate() (cwd change), so we only see ItemActivated for
+        # non-dir entries. An executable / runnable script is launched in the
+        # console; everything else opens in the editor.
         if event.entry.is_dir:
             return
+        cmd = self._executable_command(event.entry.path)
+        if cmd is not None and self._run_in_console(cmd):
+            return
         self._open_editor_window(event.entry.path)
+
+    @staticmethod
+    def _read_shebang(path: Path) -> str | None:
+        """Return the interpreter line of a `#!`-prefixed file, or None.
+
+        e.g. `#!/usr/bin/env python3\\n` → `/usr/bin/env python3`.
+        """
+        try:
+            with path.open("rb") as f:
+                first = f.readline(256)
+        except OSError:
+            return None
+        if not first.startswith(b"#!"):
+            return None
+        try:
+            line = first[2:].decode().strip()
+        except UnicodeDecodeError:
+            return None
+        return line or None
+
+    @classmethod
+    def _executable_command(cls, path: Path) -> str | None:
+        """Build the shell command that runs `path`, or None if it isn't a
+        runnable file.
+
+        Detection (mc-style), in order:
+        1. The executable bit is set → run the path directly (the kernel
+           honours the shebang or runs the binary).
+        2. A `#!` shebang is present → invoke the declared interpreter.
+        3. A known script extension → invoke the mapped interpreter.
+        """
+        try:
+            if not path.is_file():
+                return None
+        except OSError:
+            return None
+        quoted = shlex.quote(str(path))
+        try:
+            if os.access(path, os.X_OK):
+                return quoted
+        except OSError:
+            pass
+        shebang = cls._read_shebang(path)
+        if shebang:
+            return f"{shebang} {quoted}"
+        interp = _SCRIPT_INTERPRETERS.get(path.suffix.lower())
+        if interp:
+            return f"{interp} {quoted}"
+        return None
+
+    def _run_in_console(self, cmd: str) -> bool:
+        """Run `cmd` by handing the real terminal to it (mc/NC-style).
+
+        Full-screen programs (claude, vim, htop, …) need a real terminal:
+        cursor addressing, scroll regions, the kitty keyboard protocol, etc.
+        tyui's embedded relay console only emulates a thin slice of ANSI, so a
+        TUI launched there renders garbage (e.g. Shift+Enter in claude). We
+        instead suspend the UI and give the program the real tty via the
+        handover layer — exactly what mc does when you press Enter on an
+        executable.
+
+        Returns True if dispatched, False if no handover is available (so the
+        caller can fall back to opening the editor).
+        """
+        if self._has_active_modal():
+            return False
+        if self._ensure_handover() is None:
+            return False
+        self._run_handover_command(cmd)
+        return True
+
+    def _ensure_handover(self) -> TerminalHandover | None:
+        """Lazily build the terminal-handover strategy.
+
+        we-mc constructs it at mount; the other modes (fm/we/editor/cli) build
+        it on first use so running a program from the panel hands over the real
+        terminal everywhere, not just in we-mc.
+        """
+        if self._handover is None:
+            try:
+                self._handover = make_handover(self, self.terminal_mode)
+            except Exception:
+                self._handover = None
+        return self._handover
+
+    def _run_mode_chip(self) -> tuple[str, str]:
+        """(label, tooltip) for the command-line run-mode chip, reflecting the
+        current terminal handover mode."""
+        if self.terminal_mode == "suspend":
+            return (
+                "run: tty",
+                "Run mode: suspend — programs get the real terminal directly "
+                "(full-screen TUIs like claude work). Click to switch.",
+            )
+        return (
+            "run: relay",
+            "Run mode: relay — persistent subshell via a nested PTY (may garble "
+            "full-screen TUIs like claude). Click to switch to tty.",
+        )
+
+    def on_command_line_run_mode_toggle_requested(
+        self, event: CommandLine.RunModeToggleRequested
+    ) -> None:
+        event.stop()
+        self._set_terminal_mode(
+            "suspend" if self.terminal_mode == "relay" else "relay"
+        )
+
+    def _set_terminal_mode(self, mode: TerminalMode) -> None:
+        if mode == self.terminal_mode:
+            return
+        self.terminal_mode = mode
+        # Drop the live handover so the next command rebuilds it in the new
+        # mode (relay ↔ suspend pick different strategies in make_handover).
+        if self._handover is not None:
+            try:
+                self._handover.shutdown()
+            except Exception:
+                pass
+            self._handover = None
+        if self.command_line is not None:
+            label, tip = self._run_mode_chip()
+            self.command_line.set_run_mode(label, tooltip=tip)
+        self.notify(f"Run mode: {mode}", severity="information")
 
     def action_close_editor(self) -> None:
         """Esc handler — multiple roles in order of precedence:
@@ -2314,7 +2482,7 @@ class TyuiApp(App):
                 # on_window_closed isn't fired by remove_window; do the
                 # post-close housekeeping inline.
                 self._refresh_panels()
-                if self.launch_mode == "fm":
+                if self._is_panel_mode():
                     target = self._pre_modal_panel_id or "panel-left"
                     self._focus_panel(target)
                 return
@@ -2343,7 +2511,7 @@ class TyuiApp(App):
         # Window framework removes the closed window itself; ensure panels
         # see any new mtime/size.
         self._refresh_panels()
-        if self.launch_mode == "fm":
+        if self._is_panel_mode():
             target = self._pre_modal_panel_id or "panel-left"
             self._focus_panel(target)
         # Project View exit: if the last visible editor just closed, clear state
@@ -2659,7 +2827,7 @@ class TyuiApp(App):
             except Exception:
                 pass
 
-        if self.launch_mode == "fm":
+        if self._is_panel_mode():
             self._focus_panel("panel-left")
 
     def _enclosing_window(self, widget) -> Window | None:
@@ -2791,6 +2959,44 @@ class TyuiApp(App):
             return
         self._focus_command_line()
 
+    def on_window_copy_box_clicked(self, event) -> None:
+        """⧉ title-bar button: copy the panel's directory path to the clipboard."""
+        from tyui.fm.file_panel import FilePanel
+
+        win = event.window
+        content = getattr(win, "content", None)
+        if not isinstance(content, FilePanel):
+            return
+        path = str(content.cwd)
+        _copy_to_system(path)
+        # OSC 52 fallback (works over SSH where pbcopy/xclip aren't reachable).
+        try:
+            self.copy_to_clipboard(path)
+        except Exception:
+            pass
+        self.notify(f"copied {path}")
+
+    def action_insert_current_file(self) -> None:
+        """Ctrl+N: insert the active panel's current entry into the command
+        line — its name for a file/folder, or the current directory path when
+        the cursor is on the synthetic ".." parent row.
+
+        Not a priority binding: while quick-search is active the panel handles
+        Ctrl+N itself (next match) and stops the event; otherwise it bubbles
+        up here.
+        """
+        if self._has_active_modal() or self.command_line is None:
+            return
+        panel = self._active_panel()
+        if panel is None:
+            return
+        if not (0 <= panel.cursor < len(panel.entries)):
+            return
+        entry = panel.entries[panel.cursor]
+        raw = str(panel.cwd) if entry.is_parent else entry.path.name
+        self.command_line.insert_at_cursor(shlex.quote(raw) + " ")
+        self._focus_command_line()
+
     def _restore_tray_at(self, index: int) -> None:
         if self._has_active_modal() or self.desktop is None:
             return
@@ -2822,14 +3028,42 @@ class TyuiApp(App):
 
     def on_command_line_submitted(self, event: CommandLine.Submitted) -> None:
         event.stop()
-        if self.command_runner is None:
+        # Every typed command runs by handing over the real terminal (mc-style)
+        # so full-screen TUIs (claude, vim, htop, …) get a proper terminal
+        # instead of the thin relay-console ANSI emulator, which renders them as
+        # garbage. we-mc always did this; we/fm/editor/cli now do too.
+        self._run_handover_command(event.text)
+
+    def _run_handover_command(self, text: str) -> None:
+        """Run a typed command by handing over the real terminal (mc-style)."""
+        text = text.strip()
+        if not text or self._has_active_modal():
             return
-        # If the console was stashed by Ctrl+P (panels-fullscreen), bring it
-        # back so the command's output is visible, then keep the cmdline focused
-        # so the user can keep typing.
-        if self._ensure_console_visible():
-            self._focus_command_line()
-        self.command_runner.execute(event.text, anonymous=event.anonymous)
+        if text == "cd" or text.startswith("cd "):
+            self._handover_cd(text[2:].strip())
+            return
+        if self._ensure_handover() is None:
+            return
+        cwd = self._panel_cwd_for_test()
+        self._handover.run_foreground(text, cwd)
+        if self.command_history is not None:
+            self.command_history.append(text)
+        self._refresh_panels()
+
+    def _handover_cd(self, arg: str) -> None:
+        """`cd` in we-mc: move the active panel to the target directory."""
+        if not arg:
+            target = Path.home()
+        else:
+            target = Path(arg).expanduser()
+            if not target.is_absolute():
+                target = (self._panel_cwd_for_test() / target).resolve()
+        if not target.is_dir():
+            self.notify(f"cd: {target}: not a directory", severity="warning")
+            return
+        err = self._panel_cd(target)
+        if err is not None:
+            self.notify(f"cd: {err}", severity="warning")
 
     def on_command_line_cancel_requested(self, event: CommandLine.CancelRequested) -> None:
         event.stop()
@@ -2965,7 +3199,12 @@ class TyuiApp(App):
         return True
 
     def action_toggle_console(self) -> None:
-        """Ctrl+O: create/maximize the default console, or restore it."""
+        """Ctrl+O: we-mc shows the command screen; otherwise toggle console."""
+        if self.launch_mode == "we-mc":
+            handover = self._ensure_handover()
+            if handover is not None:
+                handover.command_screen(self._panel_cwd_for_test())
+            return
         # Lazily create the console-default window if it doesn't exist yet.
         self.console_registry.get_or_create(None)
         win = self._console_default_window

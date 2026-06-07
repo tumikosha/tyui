@@ -1,0 +1,100 @@
+import pytest
+
+from tyui.app import TyuiApp
+
+
+def _panel_windows(app):
+    assert app.desktop is not None
+    return [w for w in app.desktop.windows if str(w.id).startswith("panel-")]
+
+
+@pytest.mark.asyncio
+async def test_we_mc_mounts_visible_panels_and_handover(tmp_path):
+    # Force suspend mode so no real PTY/tty is needed under pytest.
+    app = TyuiApp(launch_mode="we-mc", terminal_mode="suspend")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        panels = _panel_windows(app)
+        assert len(panels) == 2
+        assert all(p in app.desktop.windows for p in panels)  # visible
+        assert app._handover is not None
+        # No streaming-console window is auto-created in we-mc.
+        assert app._console_default_window is None
+
+
+def test_we_mc_constructor_stores_terminal_mode():
+    app = TyuiApp(launch_mode="we-mc", terminal_mode="suspend")
+    assert app.launch_mode == "we-mc"
+    assert app.terminal_mode == "suspend"
+
+
+def test_terminal_mode_defaults_to_relay():
+    app = TyuiApp(launch_mode="fm")
+    assert app.terminal_mode == "relay"
+
+
+def test_is_panel_mode_covers_fm_and_we_mc():
+    assert TyuiApp(launch_mode="fm")._is_panel_mode() is True
+    assert TyuiApp(launch_mode="we-mc")._is_panel_mode() is True
+    assert TyuiApp(launch_mode="editor")._is_panel_mode() is False
+
+
+class _SpyHandover:
+    def __init__(self):
+        self.ran = []
+        self.screens = 0
+        self.shutdown_called = False
+
+    def run_foreground(self, cmd, cwd):
+        self.ran.append((cmd, str(cwd)))
+        return 0
+
+    def command_screen(self, cwd):
+        self.screens += 1
+
+    def shutdown(self):
+        self.shutdown_called = True
+
+
+@pytest.mark.asyncio
+async def test_we_mc_command_routes_to_handover(tmp_path):
+    app = TyuiApp(launch_mode="we-mc", terminal_mode="suspend")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        spy = _SpyHandover()
+        app._handover = spy
+        app._run_handover_command("htop")
+        assert spy.ran and spy.ran[0][0] == "htop"
+
+
+@pytest.mark.asyncio
+async def test_we_mc_cd_does_not_invoke_handover(tmp_path):
+    app = TyuiApp(launch_mode="we-mc", terminal_mode="suspend")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        spy = _SpyHandover()
+        app._handover = spy
+        app._run_handover_command("cd /")
+        assert spy.ran == []  # cd handled inline, no handover
+
+
+@pytest.mark.asyncio
+async def test_we_mc_ctrl_o_shows_command_screen(tmp_path):
+    app = TyuiApp(launch_mode="we-mc", terminal_mode="suspend")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        spy = _SpyHandover()
+        app._handover = spy
+        app.action_toggle_console()
+        assert spy.screens == 1
+
+
+@pytest.mark.asyncio
+async def test_we_mc_shutdown_called_on_unmount(tmp_path):
+    app = TyuiApp(launch_mode="we-mc", terminal_mode="suspend")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        spy = _SpyHandover()
+        app._handover = spy
+        app.on_unmount()
+        assert spy.shutdown_called is True

@@ -567,7 +567,9 @@ class FilePanel(WindowContent):
         else:
             name = ""
         text = (" " + name).ljust(width)[:width]
-        return Strip([Segment(text, self._base_style() + RichStyle(reverse=True))])
+        # Reverse video for the footer bar, dimmed so its background reads as
+        # less bright than a full-intensity reverse.
+        return Strip([Segment(text, self._base_style() + RichStyle(reverse=True, dim=True))])
 
     def _render_qs_bar(self, width: int) -> Strip:
         """Bottom-of-panel indicator: 'Quick search: <query>_'.
@@ -744,8 +746,9 @@ class FilePanel(WindowContent):
             self._ensure_cursor_visible()
             self.refresh()
 
-        # Double-click on a directory (or '..') == Enter.
-        if getattr(event, "chain", 1) >= 2 and self.entries[idx].is_dir:
+        # Double-click == Enter: descend into a directory, or activate a file
+        # (ItemActivated → host runs executables / opens the editor).
+        if getattr(event, "chain", 1) >= 2:
             self._qs_reset()
             self.activate()
             self.refresh()

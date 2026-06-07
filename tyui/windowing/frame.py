@@ -97,6 +97,7 @@ class BorderSides:
 @dataclass
 class Decorations:
     close_box: bool = False
+    copy_box: bool = False
     zoom_box: bool = False
     minimize_box: bool = False
     resize_grip: bool = False
@@ -158,7 +159,9 @@ def render_top(
     # Build decoration prefix (close_box + number) and suffix (zoom_box).
     prefix_parts: list[str] = []
     if decorations.close_box:
-        prefix_parts.append(f"[■]")
+        prefix_parts.append("[■]")
+    if decorations.copy_box:
+        prefix_parts.append("[⧉]")
     if decorations.number is not None:
         prefix_parts.append(f"─ {decorations.number} ─")
     prefix = "".join(prefix_parts)

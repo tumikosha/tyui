@@ -106,3 +106,25 @@ async def test_history_up_down(tmp_path):
         assert app.cl.text == "ls"
         app.cl.history_next()
         assert app.cl.text == "pwd"
+
+
+@pytest.mark.asyncio
+async def test_insert_at_cursor_into_empty(tmp_path):
+    h = History(tmp_path / "h", cap=10)
+    app = _Probe(h)
+    async with app.run_test() as pilot:
+        app.cl.insert_at_cursor("foo ")
+        await pilot.pause()
+        assert app.cl.text == "foo "
+
+
+@pytest.mark.asyncio
+async def test_insert_at_cursor_mid_text(tmp_path):
+    h = History(tmp_path / "h", cap=10)
+    app = _Probe(h)
+    async with app.run_test() as pilot:
+        app.cl.set_text("abcd")
+        app.cl._input.move_cursor((0, 2))  # between "b" and "c"
+        app.cl.insert_at_cursor("X")
+        await pilot.pause()
+        assert app.cl.text == "abXcd"

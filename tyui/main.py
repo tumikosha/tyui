@@ -50,45 +50,70 @@ def main() -> None:
     TyuiApp(launch_mode=launch_mode, initial_path=initial_path).run()
 
 
-def _resolve_we_paths(argv: list[str]) -> list[str]:
-    """Return the list of positional file paths for the `we` command."""
+def _resolve_we_args(
+    argv: list[str],
+) -> tuple[str, str | None, list[str], str]:
+    """Resolve the `we` command line.
+
+    Returns ``(launch_mode, initial_path, file_paths, terminal_mode)``.
+
+    - no positional paths            -> ("we-mc", None, [], <mode>)
+    - only a directory               -> ("we-mc", <dir>, [], <mode>)
+    - one or more real files         -> ("we", None, <files>, <mode>)
+
+    ``terminal_mode`` is "suspend" when ``--suspend`` is given, else "relay".
+    """
     parser = argparse.ArgumentParser(
         prog="we",
-        description="we — open one editor window per file, cascaded.",
+        description="we — Midnight-Commander-style file manager / editor.",
+    )
+    parser.add_argument(
+        "--suspend",
+        action="store_true",
+        help="Run shell commands via suspend+subprocess instead of a "
+        "persistent relay subshell (cross-platform, no persistent session).",
     )
     parser.add_argument(
         "paths",
         nargs="*",
         default=[],
-        help="Files to edit. Each opens in its own cascaded editor window. "
-             "Missing files open empty; directories are skipped.",
+        help="Files open in cascaded editor windows; a lone directory or no "
+        "args open the mc-style file manager.",
     )
-    return parser.parse_args(argv).paths
+    ns = parser.parse_args(argv)
+    terminal_mode = "suspend" if ns.suspend else "relay"
+    paths = ns.paths
 
-
-def _resolve_we_launch(paths: list[str]) -> tuple[str, str | None, list[str]]:
-    """Pick the launch mode for the `we` command from its positional paths.
-
-    No paths at all -> fall back to the file manager (both panels) instead of
-    an empty editor. A lone directory -> seed the file manager at that path.
-    Anything with real files -> the usual cascaded-editor `we` mode.
-    """
     if not paths:
-        return ("fm", None, [])
+        return ("we-mc", None, [], terminal_mode)
     file_paths = [p for p in paths if not os.path.isdir(p)]
     if not file_paths:
-        # Only directories were given; open the first one in the panels.
-        return ("fm", paths[0], [])
-    return ("we", None, file_paths)
+        return ("we-mc", paths[0], [], terminal_mode)
+    return ("we", None, file_paths, terminal_mode)
 
 
 def main_we() -> None:
-    paths = _resolve_we_paths(sys.argv[1:])
-    launch_mode, initial_path, file_paths = _resolve_we_launch(paths)
+    launch_mode, initial_path, file_paths, terminal_mode = _resolve_we_args(
+        sys.argv[1:]
+    )
     TyuiApp(
         launch_mode=launch_mode,
         initial_path=initial_path,
         initial_paths=file_paths,
+        terminal_mode=terminal_mode,
+    ).run()
+
+
+def main_wew() -> None:
+    """`wew` == `we --suspend`."""
+    launch_mode, initial_path, file_paths, terminal_mode = _resolve_we_args(
+        ["--suspend", *sys.argv[1:]]
+    )
+    TyuiApp(
+        launch_mode=launch_mode,
+        initial_path=initial_path,
+        initial_paths=file_paths,
+        terminal_mode=terminal_mode,
     ).run()
 
 

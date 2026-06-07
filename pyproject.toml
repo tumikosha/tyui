@@ -59,6 +59,7 @@ Documentation = "https://github.com/tumikosha/qwe#readme"
 [project.scripts]
 tyui = "tyui.main:main"
 we = "tyui.main:main_we"
+wew = "tyui.main:main_wew"
 
 [build-system]
 requires = ["hatchling"]

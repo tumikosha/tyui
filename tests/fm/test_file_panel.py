@@ -827,3 +827,14 @@ async def test_header_labels_are_centered(tmp_path: Path):
         name_cell = header[:ncol]
         assert name_cell.strip() == "Name"
         assert name_cell == "Name".center(ncol)   # centred, not left/right aligned
+
+
+def test_footer_background_is_dimmed(tmp_path):
+    # The bottom full-name line uses reverse video but dimmed, so its
+    # background reads as less bright than a full reverse bar.
+    p = FilePanel(cwd=tmp_path)
+    strip = p._render_footer(20)
+    seg = list(strip)[0]
+    assert seg.style is not None
+    assert seg.style.reverse is True
+    assert seg.style.dim is True
