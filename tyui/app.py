@@ -402,6 +402,10 @@ class TyuiApp(App):
         # the currently active one, so "Cycle theme" advances predictably.
         self._theme_names: list[str] = []
         self._theme_index: int = 0
+        # Set by _resolve_initial_theme when the persisted theme fails to load
+        # and we fall back to modern_dark; surfaced as a notify once mounted so
+        # the fallback is never silent.
+        self._theme_load_warning: str | None = None
 
     def compose(self) -> ComposeResult:
         self.menu_bar = MenuBar()
@@ -484,6 +488,17 @@ class TyuiApp(App):
         # math early-returns. call_after_refresh fires once Textual has
         # propagated the real terminal size to children.
         self.call_after_refresh(self._apply_default_layout)
+        # A persisted theme that failed to load fell back to modern_dark during
+        # compose(); now that the app is mounted, tell the user (notify needs a
+        # running app, so it can't fire from _resolve_initial_theme).
+        if self._theme_load_warning is not None:
+            self.notify(
+                self._theme_load_warning,
+                title="Ошибка темы",
+                severity="warning",
+                timeout=8.0,
+            )
+            self._theme_load_warning = None
 
     def on_unmount(self) -> None:
         # Tear down the we-mc terminal handover so its persistent PTY shell
@@ -850,7 +865,11 @@ class TyuiApp(App):
         if name and name in list_themes():
             try:
                 theme_registry.get(name)
-            except Exception:
+            except Exception as exc:
+                self._theme_load_warning = (
+                    f"Тема «{name}» не загрузилась: {exc}.\n"
+                    "Используется modern_dark — выберите другую в меню Options."
+                )
                 return "modern_dark"
             return name
         return "modern_dark"
@@ -869,7 +888,22 @@ class TyuiApp(App):
         # Drop any cached parse so re-selecting a theme after editing its file
         # (Options → Edit theme) re-reads it from disk and shows the changes.
         theme_registry.invalidate(name)
-        self.desktop.set_theme(name)
+        # A malformed theme file still appears in list_themes()/the Options menu,
+        # so selecting it lands here. Loading raises ThemeLoadError; if that
+        # escaped this handler the menu dropdown would freeze. Catch it, keep the
+        # current (working) theme, leave the config untouched, and tell the user
+        # so they can pick another from the still-live Options menu.
+        try:
+            self.desktop.set_theme(name)
+        except Exception as exc:
+            self.notify(
+                f"Тема «{name}» не загрузилась: {exc}.\n"
+                "Выберите другую тему в меню Options.",
+                title="Ошибка темы",
+                severity="error",
+                timeout=8.0,
+            )
+            return
         if name in self._theme_names:
             self._theme_index = self._theme_names.index(name)
         if self.menu_bar is not None:

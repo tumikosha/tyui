@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import tomllib
 from pathlib import Path
 
@@ -94,7 +93,19 @@ def load_theme(path_or_name: str | Path) -> Theme:
     for role, spec in styles_block.items():
         if not isinstance(spec, dict):
             continue
-        styles[role] = _parse_style(spec)
+        style = _parse_style(spec)
+        # Validate colours eagerly. Rich parses colours when the style is built,
+        # so an invalid value (e.g. a 5-digit hex like "#11111") only blows up at
+        # render time — the first time a widget paints this role, which for an
+        # editor/menu colour means a crash deep in the UI loop. Surfacing it as a
+        # ThemeLoadError here lets the app's theme guards fall back gracefully.
+        try:
+            style.to_rich()
+        except Exception as exc:
+            raise ThemeLoadError(
+                f"Invalid colour in theme {p} (role '{role}'): {exc}"
+            ) from exc
+        styles[role] = style
 
     return Theme(
         name=theme_block.get("name", p.stem),

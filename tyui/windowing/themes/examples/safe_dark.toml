@@ -1,0 +1,164 @@
+# safe_dark — neutral dark, 256-color-safe.
+# Every colour is an exact xterm-256 entry (cube channels in
+# {00,5f,87,af,d7,ff} or a grayscale step), so it renders identically on
+# 256-colour terminals (macOS Terminal.app) and truecolor terminals.
+# This is `modern_dark` snapped onto the xterm-256 grid.
+
+[theme]
+name = "safe_dark"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#1c1c1c"
+[styles."desktop.pattern"]
+fg = "#303030"
+bg = "#1c1c1c"
+
+[styles."window.border.focused"]
+fg = "#ffffff"
+bg = "#1c1c1c"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#5f5f5f"
+bg = "#1c1c1c"
+
+[styles."window.title.focused"]
+fg = "#ffffff"
+bg = "#1c1c1c"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#8a8a8a"
+bg = "#1c1c1c"
+[styles."window.subtitle"]
+fg = "#a8a8a8"
+bg = "#1c1c1c"
+
+[styles."window.content"]
+fg = "#d0d0d0"
+bg = "#262626"
+
+[styles."panel.file.dir"]
+fg = "#5fafff"
+bold = true
+[styles."panel.file.symlink"]
+fg = "#00d7d7"
+[styles."panel.file.executable"]
+fg = "#5fd75f"
+bold = true
+[styles."panel.file.archive"]
+fg = "#ff5f5f"
+[styles."panel.file.image"]
+fg = "#d787ff"
+[styles."panel.file.media"]
+fg = "#d75fd7"
+[styles."panel.file.document"]
+fg = "#ffd787"
+[styles."panel.file.source"]
+fg = "#d7d787"
+[styles."panel.file.config"]
+fg = "#87afaf"
+[styles."panel.file.hidden"]
+fg = "#8a8a8a"
+
+[styles."decoration.close_box"]
+fg = "#ff5f5f"
+bg = "#1c1c1c"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#5fd75f"
+bg = "#1c1c1c"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#a8a8a8"
+bg = "#1c1c1c"
+[styles."decoration.number"]
+fg = "#a8a8a8"
+bg = "#1c1c1c"
+
+[styles."icon_tray.background"]
+bg = "#121212"
+[styles."icon.normal"]
+fg = "#d0d0d0"
+bg = "#121212"
+[styles."icon.hover"]
+fg = "#1c1c1c"
+bg = "#d0d0d0"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#d0d0d0"
+bg = "#121212"
+[styles."menu.item"]
+fg = "#d0d0d0"
+bg = "#121212"
+[styles."menu.item.active"]
+fg = "#121212"
+bg = "#d0d0d0"
+bold = true
+[styles."menu.hotkey"]
+fg = "#ff8787"
+bg = "#121212"
+[styles."menu.dropdown.border"]
+fg = "#a8a8a8"
+bg = "#262626"
+[styles."menu.separator"]
+fg = "#5f5f5f"
+bg = "#262626"
+
+[styles."statusbar_bg"]
+fg = "#d0d0d0"
+bg = "#121212"
+[styles."statusbar_key"]
+fg = "#121212"
+bg = "#00afaf"
+bold = true
+[styles."statusbar_label"]
+fg = "#d0d0d0"
+bg = "#121212"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#005f87"
+[styles."editor.selection_cursor"]
+bg = "#005f87"
+reverse = true
+[styles."editor.search_match"]
+bg = "#875f00"
+[styles."editor.search_current"]
+bg = "#ff8700"
+[styles."editor.fold_marker"]
+fg = "#d78700"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#5f5f5f"
+
+[styles."editor.syntax.keyword"]
+fg = "#d787d7"
+[styles."editor.syntax.name"]
+fg = "#87d7ff"
+[styles."editor.syntax.function"]
+fg = "#d7d787"
+[styles."editor.syntax.class"]
+fg = "#5fd7af"
+[styles."editor.syntax.string"]
+fg = "#d7875f"
+[styles."editor.syntax.number"]
+fg = "#afd787"
+[styles."editor.syntax.comment"]
+fg = "#5faf5f"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#d7d7d7"
+[styles."editor.syntax.builtin"]
+fg = "#5fd7af"
+[styles."editor.syntax.error"]
+fg = "#ff5f5f"

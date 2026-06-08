@@ -1,0 +1,162 @@
+# safe_light — light theme, 256-color-safe.
+# Dark text on a light grayscale background; every colour is an exact
+# xterm-256 entry, so it looks identical on 256-colour and truecolor terminals.
+
+[theme]
+name = "safe_light"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#e4e4e4"
+[styles."desktop.pattern"]
+fg = "#d0d0d0"
+bg = "#e4e4e4"
+
+[styles."window.border.focused"]
+fg = "#000000"
+bg = "#ffffff"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#8a8a8a"
+bg = "#ffffff"
+
+[styles."window.title.focused"]
+fg = "#000000"
+bg = "#ffffff"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#5f5f5f"
+bg = "#ffffff"
+[styles."window.subtitle"]
+fg = "#5f5f5f"
+bg = "#ffffff"
+
+[styles."window.content"]
+fg = "#1c1c1c"
+bg = "#ffffff"
+
+[styles."panel.file.dir"]
+fg = "#0000af"
+bold = true
+[styles."panel.file.symlink"]
+fg = "#008787"
+[styles."panel.file.executable"]
+fg = "#008700"
+bold = true
+[styles."panel.file.archive"]
+fg = "#af0000"
+[styles."panel.file.image"]
+fg = "#8700af"
+[styles."panel.file.media"]
+fg = "#af00af"
+[styles."panel.file.document"]
+fg = "#875f00"
+[styles."panel.file.source"]
+fg = "#5f5f00"
+[styles."panel.file.config"]
+fg = "#005f5f"
+[styles."panel.file.hidden"]
+fg = "#8a8a8a"
+
+[styles."decoration.close_box"]
+fg = "#af0000"
+bg = "#ffffff"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#008700"
+bg = "#ffffff"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#5f5f5f"
+bg = "#ffffff"
+[styles."decoration.number"]
+fg = "#5f5f5f"
+bg = "#ffffff"
+
+[styles."icon_tray.background"]
+bg = "#d7d7d7"
+[styles."icon.normal"]
+fg = "#1c1c1c"
+bg = "#d7d7d7"
+[styles."icon.hover"]
+fg = "#ffffff"
+bg = "#0000af"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#1c1c1c"
+bg = "#d7d7d7"
+[styles."menu.item"]
+fg = "#1c1c1c"
+bg = "#d7d7d7"
+[styles."menu.item.active"]
+fg = "#ffffff"
+bg = "#0000af"
+bold = true
+[styles."menu.hotkey"]
+fg = "#af0000"
+bg = "#d7d7d7"
+[styles."menu.dropdown.border"]
+fg = "#5f5f5f"
+bg = "#ffffff"
+[styles."menu.separator"]
+fg = "#8a8a8a"
+bg = "#ffffff"
+
+[styles."statusbar_bg"]
+fg = "#1c1c1c"
+bg = "#d7d7d7"
+[styles."statusbar_key"]
+fg = "#ffffff"
+bg = "#008787"
+bold = true
+[styles."statusbar_label"]
+fg = "#1c1c1c"
+bg = "#d7d7d7"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#afd7ff"
+[styles."editor.selection_cursor"]
+bg = "#afd7ff"
+reverse = true
+[styles."editor.search_match"]
+bg = "#ffd787"
+[styles."editor.search_current"]
+bg = "#ffaf00"
+[styles."editor.fold_marker"]
+fg = "#af5f00"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#8a8a8a"
+
+[styles."editor.syntax.keyword"]
+fg = "#af00af"
+[styles."editor.syntax.name"]
+fg = "#005faf"
+[styles."editor.syntax.function"]
+fg = "#875f00"
+[styles."editor.syntax.class"]
+fg = "#005f5f"
+[styles."editor.syntax.string"]
+fg = "#af5f00"
+[styles."editor.syntax.number"]
+fg = "#5f8700"
+[styles."editor.syntax.comment"]
+fg = "#5f875f"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#1c1c1c"
+[styles."editor.syntax.builtin"]
+fg = "#005f5f"
+[styles."editor.syntax.error"]
+fg = "#af0000"

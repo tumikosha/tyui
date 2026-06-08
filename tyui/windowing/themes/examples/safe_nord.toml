@@ -1,0 +1,164 @@
+# safe_nord — Nord palette snapped onto the xterm-256 grid.
+# Recognizably Nord (Polar Night base, Frost blues/cyans, Aurora accents) but
+# coarser/more saturated than true Nord, because Nord's muted off-grid colours
+# are rounded to exact xterm-256 entries. The payoff: it renders identically on
+# 256-colour terminals (macOS Terminal.app) and truecolor terminals.
+
+[theme]
+name = "safe_nord"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#303030"
+[styles."desktop.pattern"]
+fg = "#3a3a3a"
+bg = "#303030"
+
+[styles."window.border.focused"]
+fg = "#87d7d7"
+bg = "#303030"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#5f87af"
+bg = "#303030"
+
+[styles."window.title.focused"]
+fg = "#87d7d7"
+bg = "#303030"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#5f87af"
+bg = "#303030"
+[styles."window.subtitle"]
+fg = "#5f87af"
+bg = "#303030"
+
+[styles."window.content"]
+fg = "#d7d7d7"
+bg = "#3a3a3a"
+
+[styles."panel.file.dir"]
+fg = "#87afd7"
+bold = true
+[styles."panel.file.symlink"]
+fg = "#87d7d7"
+[styles."panel.file.executable"]
+fg = "#afd787"
+bold = true
+[styles."panel.file.archive"]
+fg = "#af5f5f"
+[styles."panel.file.image"]
+fg = "#af87af"
+[styles."panel.file.media"]
+fg = "#d787af"
+[styles."panel.file.document"]
+fg = "#d7d787"
+[styles."panel.file.source"]
+fg = "#d7d787"
+[styles."panel.file.config"]
+fg = "#87afaf"
+[styles."panel.file.hidden"]
+fg = "#5f5f5f"
+
+[styles."decoration.close_box"]
+fg = "#af5f5f"
+bg = "#303030"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#afd787"
+bg = "#303030"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#5f87af"
+bg = "#303030"
+[styles."decoration.number"]
+fg = "#5f87af"
+bg = "#303030"
+
+[styles."icon_tray.background"]
+bg = "#262626"
+[styles."icon.normal"]
+fg = "#d7d7d7"
+bg = "#262626"
+[styles."icon.hover"]
+fg = "#303030"
+bg = "#87d7d7"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#d7d7d7"
+bg = "#262626"
+[styles."menu.item"]
+fg = "#FFFFFF"
+bg = "#3a3a3a"
+[styles."menu.item.active"]
+fg = "#303030"
+bg = "#87d7d7"
+bold = true
+[styles."menu.hotkey"]
+fg = "#d7875f"
+bg = "#262626"
+[styles."menu.dropdown.border"]
+fg = "#5f87af"
+bg = "#3a3a3a"
+[styles."menu.separator"]
+fg = "#5f5f5f"
+bg = "#3a3a3a"
+
+[styles."statusbar_bg"]
+fg = "#d7d7d7"
+bg = "#262626"
+[styles."statusbar_key"]
+fg = "#303030"
+bg = "#87d7d7"
+bold = true
+[styles."statusbar_label"]
+fg = "#d7d7d7"
+bg = "#262626"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#5f87af"
+[styles."editor.selection_cursor"]
+bg = "#5f87af"
+reverse = true
+[styles."editor.search_match"]
+bg = "#87875f"
+[styles."editor.search_current"]
+bg = "#d7875f"
+[styles."editor.fold_marker"]
+fg = "#d7875f"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#5f5f5f"
+
+[styles."editor.syntax.keyword"]
+fg = "#af87af"
+[styles."editor.syntax.name"]
+fg = "#d7d7d7"
+[styles."editor.syntax.function"]
+fg = "#87d7d7"
+[styles."editor.syntax.class"]
+fg = "#87afaf"
+[styles."editor.syntax.string"]
+fg = "#afd787"
+[styles."editor.syntax.number"]
+fg = "#d7875f"
+[styles."editor.syntax.comment"]
+fg = "#5f87af"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#87afaf"
+[styles."editor.syntax.builtin"]
+fg = "#87afaf"
+[styles."editor.syntax.error"]
+fg = "#af5f5f"
