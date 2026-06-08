@@ -103,7 +103,7 @@ class FilePanel(WindowContent):
         self.row_offset: int = 0
         self.sort_order: SortOrder = SortOrder.NAME
         self.sort_descending: bool = default_descending(SortOrder.NAME)
-        self.show_hidden: bool = False
+        self.show_hidden: bool = True
         self.view_mode: PanelViewMode = PanelViewMode.FULL
         self.selection: set[Path] = set()
         # Stash the cwd into the reactive backing field so consumers reading
@@ -1062,7 +1062,8 @@ class FilePanel(WindowContent):
 
         return [
             WindowCommand(id="panel.new",    label="New",    handler=_bind("new")),
-            WindowCommand(id="panel.project_view", label="Project View", handler=_bind("project_view"), hotkey="f2"),
+            WindowCommand(id="panel.project_view", label="Project View", handler=_bind("project_view"), hotkey="f1"),
+            WindowCommand(id="panel.user_menu", label="User menu", handler=_bind("user_menu"), hotkey="f2"),
             WindowCommand(id="panel.view",   label="View",   handler=_bind("view"),   hotkey="f3"),
             WindowCommand(id="panel.edit",   label="Edit",   handler=_bind("edit"),   hotkey="f4"),
             WindowCommand(id="panel.copy",   label="Copy",   handler=_bind("copy"),   hotkey="f5"),
@@ -1071,4 +1072,5 @@ class FilePanel(WindowContent):
             WindowCommand(id="panel.delete", label="Delete", handler=_bind("delete"), hotkey="f8"),
             WindowCommand(id="panel.chmod",  label="Chmod",  handler=_bind("chmod"), hotkey="ctrl+a"),
             WindowCommand(id="panel.find_file", label="Find file…", handler=_bind("find_file"), hotkey="alt+f7"),
+            WindowCommand(id="panel.toggle_hidden", label="Show hidden files", handler=_bind("toggle_hidden"), hotkey="alt+h"),
         ]

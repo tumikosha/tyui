@@ -167,3 +167,11 @@ tests; widgets and the app shell have async smoke/integration tests
   / `midnight_commander` examples are partial at 21 roles).
 - Per-`vibe/general.md`, user hotkeys/macros are also intended to live under
   `~/.config/tyui/` (those loaders not implemented yet).
+- User Menu (F2): mc/far-style command menu defined in Markdown. Loaded from
+  `./.tyui.menu.md` (active panel dir) merged over `~/.config/tyui/menu.md`.
+  `##` = section, `###` = entry with optional `(x)` hotkey, body = first fenced
+  code block. Macros: `%f %d %t %s %F %D %x %b %%` and interactive `%{Prompt}`.
+  Bodies run through the handover (panel cwd). F4 in the dialog edits the source
+  file; first F2 with no file seeds an example. See `tyui/fm/user_menu.py`
+  (pure parser/macros), `user_menu_loader.py` (I/O), `user_menu_dialog.py`
+  (modal).

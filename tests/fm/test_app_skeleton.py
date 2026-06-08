@@ -38,7 +38,7 @@ async def test_app_status_bar_shows_default_fkey_labels():
         await pilot.pause()
         sb = app.query_one(StatusBar)
         labels = {item.label for item in sb.items}
-        assert "Help" in labels
+        assert "UsrMenu" in labels  # F2 opens the User Menu
         assert "Edit" in labels
         assert "Quit" in labels
 
@@ -65,6 +65,17 @@ async def test_editor_menu_exposes_syntax_commands():
         cmd_ids = {getattr(item, "command_id", None) for item in editor_menu.items}
         assert "toggle_syntax" in cmd_ids
         assert "set_language" in cmd_ids
+
+
+async def test_view_menu_exposes_panels_fullscreen_and_console_toggle():
+    """The View menu must surface Panels Fullscreen (Ctrl+P) and Toggle console (Ctrl+O)."""
+    app = TyuiApp(launch_mode="fm")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        view_menu = next(m for m in app._all_menus if m.label == "View")
+        cmd_ids = {getattr(item, "command_id", None) for item in view_menu.items}
+        assert "panels.fullscreen" in cmd_ids
+        assert "console.toggle" in cmd_ids
 
 
 @pytest.mark.asyncio

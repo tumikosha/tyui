@@ -55,6 +55,9 @@ from tyui.fm.file_panel import FilePanel
 from tyui.fm.find_file import FindOptions, walk as find_walk
 from tyui.fm.find_results import SearchResultsContent
 from tyui.fm.keymap import DEFAULT_FKEY_LABELS, EDITOR_FKEY_LABELS
+from tyui.fm.user_menu import MacroContext, collect_prompts, expand_macros
+from tyui.fm.user_menu_loader import load_menu, seed_global_menu
+from tyui.fm.user_menu_dialog import UserMenuDialog
 from tyui.config import user_config
 from tyui.fm.panel_view import PanelViewMode
 from tyui.fm.sort import SortOrder
@@ -127,7 +130,15 @@ class _FocusableEditorContent(EditorContent):
             commands.append(
                 WindowCommand(
                     id="project_view", label="Project View",
-                    handler=handler, hotkey="f2",
+                    handler=handler, hotkey="f1",
+                )
+            )
+        um = getattr(app, "action_user_menu", None)
+        if callable(um):
+            commands.append(
+                WindowCommand(
+                    id="user_menu", label="User menu",
+                    handler=um, hotkey="f2",
                 )
             )
         return commands
@@ -201,6 +212,11 @@ class CancelSearchRequest:
     """Routes the Yes/No interrupt confirmation back to the SearchResultsContent."""
 
     content: SearchResultsContent
+
+
+@dataclass(frozen=True)
+class UserMenuPromptRequest:
+    label: str
 
 
 LaunchMode = Literal["fm", "editor", "cli", "we", "we-mc"]
@@ -361,8 +377,10 @@ class TyuiApp(App):
         self.command_runner: CommandRunner | None = None
         self._pre_console_focus = None
         self._console_default_window = None
+        self._user_menu_ctx: MacroContext | None = None
+        self._user_menu_pending: dict | None = None
         self._editor_seq = 0
-        # Project View (F2): id of the panel currently acting as the 1/4 tree,
+        # Project View (F1): id of the panel currently acting as the 1/4 tree,
         # or None when Project View is not active. Drives resize relayout and
         # the editor-side entry point; cleared by _toggle_panel (the exit path).
         self._project_tree_panel_id: str | None = None
@@ -573,6 +591,12 @@ class TyuiApp(App):
 
     def on_input_dialog_submitted(self, event: InputDialog.Submitted) -> None:
         ctx = event.dialog.context
+        if isinstance(ctx, UserMenuPromptRequest):
+            self._close_modal(event.dialog)
+            if self._user_menu_pending is not None:
+                self._user_menu_pending["values"][ctx.label] = event.value
+                self._advance_user_menu_prompts()
+            return
         if isinstance(ctx, HexSearchRequest) and event.value:
             # Close modal first so the viewer is back on top before we scroll
             # — otherwise the post-search refresh paints behind the dialog.
@@ -607,6 +631,8 @@ class TyuiApp(App):
         dialog.focus_input()
 
     def on_input_dialog_cancelled(self, event: InputDialog.Cancelled) -> None:
+        if isinstance(event.dialog.context, UserMenuPromptRequest):
+            self._user_menu_pending = None
         self._close_modal(event.dialog)
 
     def _report_op_result(self, op_name: str, result: OpResult) -> None:
@@ -971,7 +997,7 @@ class TyuiApp(App):
                 MenuItem(command_id="save"),
                 MenuItem(command_id="save_as"),
                 MenuSeparator(),
-                MenuItem(label="Exit", command_id="app.quit"),
+                MenuItem(label="Quit", hotkey="F10", command_id="app.quit"),
             ]),
             Menu("Command", [
                 MenuItem(command_id="panel.copy"),
@@ -1014,6 +1040,11 @@ class TyuiApp(App):
                 MenuSeparator(),
                 MenuItem(command_id="toggle_syntax"),
                 MenuItem(command_id="set_language"),
+            ]),
+            Menu("View", [
+                MenuItem(command_id="panels.fullscreen"),  # Ctrl+P
+                MenuItem(command_id="console.toggle"),       # Ctrl+O
+                MenuItem(command_id="panel.toggle_hidden"),  # Alt+H
             ]),
             Menu("Options", [
                 MenuItem(label="Cycle theme", command_id="theme.cycle"),
@@ -1059,11 +1090,12 @@ class TyuiApp(App):
         self._refresh_status_bar()
 
     def _panel_status_items(self) -> list[StatusItem]:
-        # F-keys that drive file-panel actions. F1 (Help) is not implemented
-        # yet — leaving its handler at None makes the status bar ignore clicks
-        # on that cell. F2 ("Prj Edit") opens Project View.
+        # F-keys that drive file-panel actions. F1 ("Prj Edit") opens Project
+        # View. F2 is unused — leaving its handler at None makes the status bar
+        # ignore clicks on that cell.
         handlers: dict[str, Callable[[], None]] = {
-            "2":  self.action_project_view,
+            "1":  self.action_project_view,
+            "2":  self.action_user_menu,
             "3":  self.action_view,
             "4":  self.action_edit,
             "5":  self.action_copy,
@@ -1089,7 +1121,8 @@ class TyuiApp(App):
             return _run
 
         handlers: dict[str, Callable[[], None]] = {
-            "2":  _dispatch("project_view"),
+            "1":  _dispatch("project_view"),
+            "2":  _dispatch("user_menu"),
             "3":  _dispatch("save_as"),
             "4":  _dispatch("replace"),
             "5":  _dispatch("split_h"),
@@ -2048,6 +2081,16 @@ class TyuiApp(App):
             return  # F3 on a dir is a no-op
         self._open_editor_window(entry.path, read_only=True)
 
+    def action_toggle_hidden(self) -> None:
+        """Alt+H / View menu: show or hide dot-files in the active panel."""
+        if self._has_active_modal():
+            return
+        panel = self._active_panel()
+        if panel is None:
+            return
+        panel.toggle_show_hidden()
+        panel.refresh()
+
     # Threshold above which F3 switches to the chunked hex viewer instead of
     # slurping the file into a TextBuffer. 4 MiB is a pragmatic cut-off:
     # below it Textual renders text views without noticeable lag; above it
@@ -2121,7 +2164,7 @@ class TyuiApp(App):
         return node
 
     def action_project_view(self) -> None:
-        """F2: enter Project View. Branches on whether an editor or panel is focused."""
+        """F1: enter Project View. Branches on whether an editor or panel is focused."""
         if self._has_active_modal():
             return
         if self.desktop is None:
@@ -2152,7 +2195,7 @@ class TyuiApp(App):
             return
         entry = panel.entries[panel.cursor]
         if entry.is_dir:
-            return  # F2 on a directory is a no-op, mirroring F4.
+            return  # F1 on a directory is a no-op, mirroring F4.
         tree_id = tree_win.id
         other_id = "panel-right" if tree_id == "panel-left" else "panel-left"
         # Hide the opposite panel.
@@ -2245,7 +2288,7 @@ class TyuiApp(App):
         self._project_tree_panel_id = tree_id
         self._enter_tree_short_mode(tree_win.content)
         self._layout_project_view(tree_win=tree_win, editor_win=editor_win)
-        # F2 from the editor jumps focus INTO the tree so the user can navigate
+        # F1 from the editor jumps focus INTO the tree so the user can navigate
         # the file listing immediately (the editor stays open on the right).
         self.desktop.focus_window(tree_win)
 
@@ -2996,6 +3039,122 @@ class TyuiApp(App):
         raw = str(panel.cwd) if entry.is_parent else entry.path.name
         self.command_line.insert_at_cursor(shlex.quote(raw) + " ")
         self._focus_command_line()
+
+    def _focused_editor_content(self):
+        """Return the focused EditorContent, or None."""
+        if self.desktop is None:
+            return None
+        win = self.desktop.focused_window
+        content = getattr(win, "content", None) if win is not None else None
+        return content if isinstance(content, EditorContent) else None
+
+    def _build_macro_context(self) -> tuple[MacroContext, Path]:
+        """Build the macro context + run cwd from the focused editor or panel.
+
+        A focused editor wins: ``_active_panel()`` falls back to ``panel-left``
+        whenever it exists (even when the editor has focus), so the editor
+        branch must be checked first or its file would never reach the macros.
+        """
+        content = self._focused_editor_content()
+        if content is not None:
+            fp = getattr(content, "_file_path", None)
+            if fp:
+                p = Path(fp)
+                ctx = MacroContext(
+                    current_file=p.name, tagged=(), panel_dir=str(p.parent),
+                    other_file=None, other_dir=None,
+                )
+                return ctx, p.parent
+        panel = self._active_panel()
+        if panel is not None:
+            cur = None
+            if 0 <= panel.cursor < len(panel.entries):
+                e = panel.entries[panel.cursor]
+                if not e.is_parent:
+                    cur = e.path.name
+            tagged = tuple(p.name for p in panel.selected_paths())
+            other = self._opposite_panel(panel)
+            other_file = other_dir = None
+            if other is not None:
+                other_dir = str(other.cwd)
+                if 0 <= other.cursor < len(other.entries):
+                    oe = other.entries[other.cursor]
+                    if not oe.is_parent:
+                        other_file = oe.path.name
+            ctx = MacroContext(
+                current_file=cur, tagged=tagged, panel_dir=str(panel.cwd),
+                other_file=other_file, other_dir=other_dir,
+            )
+            return ctx, panel.cwd
+        cwd = self._panel_cwd_for_test()
+        ctx = MacroContext(
+            current_file=None, tagged=(), panel_dir=str(cwd),
+            other_file=None, other_dir=None,
+        )
+        return ctx, cwd
+
+    def action_user_menu(self) -> None:
+        """F2: open the mc/far-style User Menu (panel or editor)."""
+        if self._has_active_modal() or self.desktop is None:
+            return
+        ctx, _cwd = self._build_macro_context()
+        self._user_menu_ctx = ctx
+        loaded = load_menu(Path(ctx.panel_dir))
+        if not loaded.has_any and not loaded.any_file_exists:
+            path = seed_global_menu()
+            self._open_editor_window(path, read_only=False)
+            return
+        self._remember_active_panel_id()
+        dialog = UserMenuDialog(
+            loaded.rows, default_source=loaded.local_path or loaded.global_path
+        )
+        show_modal(self.desktop, dialog, title="User menu", size=(60, 18))
+
+    def on_user_menu_dialog_selected(self, event: UserMenuDialog.Selected) -> None:
+        self._close_modal(event.dialog)
+        ctx = self._user_menu_ctx
+        cwd = Path(ctx.panel_dir) if ctx is not None else self._panel_cwd_for_test()
+        self._user_menu_pending = {
+            "body": event.entry.body,
+            "prompts": collect_prompts(event.entry.body),
+            "values": {},
+            "cwd": cwd,
+        }
+        self._advance_user_menu_prompts()
+
+    def on_user_menu_dialog_cancelled(self, event: UserMenuDialog.Cancelled) -> None:
+        self._close_modal(event.dialog)
+
+    def on_user_menu_dialog_edit_requested(
+        self, event: UserMenuDialog.EditRequested
+    ) -> None:
+        self._close_modal(event.dialog)
+        self._open_editor_window(event.source, read_only=False)
+
+    def _advance_user_menu_prompts(self) -> None:
+        pend = self._user_menu_pending
+        if pend is None or self.desktop is None:
+            return
+        remaining = [p for p in pend["prompts"] if p not in pend["values"]]
+        if not remaining:
+            ctx = self._user_menu_ctx or MacroContext(None, (), str(pend["cwd"]), None, None)
+            body = expand_macros(pend["body"], ctx, pend["values"])
+            self._user_menu_pending = None
+            self._run_user_menu_body(body, pend["cwd"])
+            return
+        label = remaining[0]
+        dialog = InputDialog(label, context=UserMenuPromptRequest(label=label))
+        show_modal(self.desktop, dialog, title="User menu", size=(50, 5))
+        dialog.focus_input()
+
+    def _run_user_menu_body(self, body: str, cwd: Path) -> None:
+        body = body.strip()
+        if not body or self._ensure_handover() is None:
+            return
+        self._handover.run_foreground(body, cwd)
+        if self.command_history is not None:
+            self.command_history.append(body)
+        self._refresh_panels()
 
     def _restore_tray_at(self, index: int) -> None:
         if self._has_active_modal() or self.desktop is None:

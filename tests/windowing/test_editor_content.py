@@ -195,3 +195,36 @@ async def test_unsplit_resets_editor_size():
         w_style = content._editor.styles.width
         unit = getattr(w_style, "unit", None)
         assert unit is not None and getattr(unit, "name", "") == "FRACTION"
+
+
+@pytest.mark.asyncio
+async def test_save_shows_saved_as_toast(tmp_path, monkeypatch):
+    f = tmp_path / "note.txt"
+    f.write_text("old\n")
+    content = EditorContent(initial_text="new text", title=f.name)
+    content._editor.buffer.file_path = str(f)
+    app = _EditorApp(content)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda msg, **k: notes.append(msg))
+        content._save()
+        await pilot.pause()
+    assert content.is_dirty is False
+    assert notes == [f"Saved as {f}"]
+    assert f.read_text() == "new text"
+
+
+@pytest.mark.asyncio
+async def test_save_as_shows_saved_as_toast(tmp_path, monkeypatch):
+    dest = tmp_path / "out.txt"
+    content = EditorContent(initial_text="hello")
+    app = _EditorApp(content)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda msg, **k: notes.append(msg))
+        content.save_to(str(dest))
+        await pilot.pause()
+    assert notes == [f"Saved as {dest}"]
+    assert dest.read_text() == "hello"

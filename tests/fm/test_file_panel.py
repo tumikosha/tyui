@@ -23,7 +23,7 @@ def test_panel_default_state(tmp_path: Path):
     assert p.cursor == 0
     assert p.row_offset == 0
     assert p.sort_order == SortOrder.NAME
-    assert p.show_hidden is False
+    assert p.show_hidden is True
 
 
 def test_panel_refresh_listing_loads_entries_with_parent(tmp_path: Path):
@@ -106,10 +106,11 @@ def test_panel_toggle_show_hidden_re_loads(tmp_path: Path):
     (tmp_path / ".hidden").write_text("")
     p = FilePanel(cwd=tmp_path)
     p.refresh_listing()
-    assert all(e.name != ".hidden" for e in p.entries)
-    p.toggle_show_hidden()
-    assert p.show_hidden is True
+    # Dot-files are shown by default now.
     assert any(e.name == ".hidden" for e in p.entries)
+    p.toggle_show_hidden()
+    assert p.show_hidden is False
+    assert all(e.name != ".hidden" for e in p.entries)
 
 
 def test_panel_can_focus_is_true():

@@ -136,6 +136,67 @@ def test_relay_send_command_cds_to_cwd_and_carries_no_sentinel():
     assert "TYUI_END" not in text
 
 
+def test_relay_sync_cwd_cds_to_panel_dir_with_no_command():
+    # Ctrl+O into the live subshell must first cd to the active panel dir so
+    # the long-lived shell tracks the panel (mc parity) — and it carries no
+    # trailing command, only the cd.
+    from pathlib import Path
+
+    h = RelayHandover(_FakeApp())
+
+    class _CapturingProc:
+        def write(self, data):
+            self.last = data
+
+    h._proc = _CapturingProc()
+    h._sync_cwd(Path("/tmp/some dir"))
+    text = h._proc.last.decode()
+    assert text.startswith("cd ")
+    assert "'/tmp/some dir'" in text  # shlex-quoted path
+    assert text.endswith("\n")
+    assert ";" not in text  # no chained command, unlike _send_command
+
+
+def test_relay_command_screen_syncs_cwd_to_panel(monkeypatch, tmp_path):
+    # Reusing an already-alive subshell: command_screen must still cd to the
+    # current panel dir before handing over the screen, otherwise it lands in
+    # whatever directory the last command left it in (the reported bug).
+    import shlex as _shlex
+    import termios
+    import tty
+
+    h = RelayHandover(_FakeApp())
+
+    class _CapturingProc:
+        fd = 0
+
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.setattr(
+        h, "_ensure_shell", lambda cwd: setattr(h, "_proc", _CapturingProc())
+    )
+    monkeypatch.setattr(h, "_propagate_winsize", lambda: None)
+    monkeypatch.setattr(h, "_interactive_relay", lambda *a, **k: None)
+    monkeypatch.setattr(termios, "tcgetattr", lambda fd: None)
+    monkeypatch.setattr(termios, "tcsetattr", lambda fd, when, old: None)
+    monkeypatch.setattr(tty, "setraw", lambda fd: None)
+
+    class _FakeStdin:
+        def fileno(self):
+            return 0
+
+    monkeypatch.setattr(sys, "stdin", _FakeStdin())
+
+    h.command_screen(tmp_path)
+    joined = b"".join(h._proc.writes).decode()
+    assert "cd " in joined
+    assert _shlex.quote(str(tmp_path)) in joined
+
+
 def test_prompt_hook_setup_writes_rc_to_fifo():
     from tyui.fm.console.handover import _prompt_hook_setup
 

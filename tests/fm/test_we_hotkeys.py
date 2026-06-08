@@ -58,3 +58,20 @@ async def test_we_tile_vertical_hotkey_dispatches():
         await pilot.press("ctrl+u")
         await pilot.pause()
         assert calls == ["tile_v"]
+
+
+@pytest.mark.asyncio
+async def test_alt_h_toggles_show_hidden_on_active_panel(tmp_path):
+    app = TyuiApp(launch_mode="fm", initial_path=str(tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        panel = app._active_panel()
+        assert panel is not None
+        # Hidden files are shown by default; Alt+H toggles them off, then on.
+        assert panel.show_hidden is True
+        await pilot.press("alt+h")
+        await pilot.pause()
+        assert panel.show_hidden is False
+        await pilot.press("alt+h")
+        await pilot.pause()
+        assert panel.show_hidden is True

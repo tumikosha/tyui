@@ -305,9 +305,18 @@ class EditorContent(WindowContent):
         return commands
 
     def _save(self) -> None:
-        if self._editor.buffer.file_path:
+        path = self._editor.buffer.file_path
+        if path:
             self._editor.buffer.save()
             self.is_dirty = False
+            self._notify_saved(path)
+
+    def _notify_saved(self, path: str) -> None:
+        """Toast confirming where the buffer was written (Ctrl+S / Save As)."""
+        try:
+            self.app.notify(f"Saved as {path}")
+        except Exception:
+            pass
 
     def _save_as(self) -> None:
         # Delegate to the host app — modal dialogs need Desktop access.
@@ -337,6 +346,7 @@ class EditorContent(WindowContent):
         self._editor.buffer.save()
         self.window_title = Path(path).name
         self.is_dirty = False
+        self._notify_saved(path)
 
     def _active_editor(self) -> EditorWidget:
         if self._editor2 is not None and getattr(self._editor2, "has_focus", False):

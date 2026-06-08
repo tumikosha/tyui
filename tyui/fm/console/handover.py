@@ -232,6 +232,16 @@ class RelayHandover:
         line = f"cd {shlex.quote(str(cwd))} 2>/dev/null; {cmd}\n"
         self._proc.write(line.encode("utf-8", errors="replace"))
 
+    def _sync_cwd(self, cwd: Path) -> None:
+        """``cd`` the persistent subshell to the active panel dir before the
+        interactive command screen appears. The shell is long-lived and may
+        have been left in a different directory by an earlier command, so
+        without this Ctrl+O would land in a stale cwd instead of the directory
+        shown in the panel (mc parity)."""
+        assert self._proc is not None
+        line = f"cd {shlex.quote(str(cwd))} 2>/dev/null\n"
+        self._proc.write(line.encode("utf-8", errors="replace"))
+
     def _pump(self, in_fds: list[int], master_fd: int, out) -> int:
         """Bridge bytes verbatim until the completion marker arrives on the
         FIFO. ``in_fds`` -> master (raw keys), master -> ``out`` (program
@@ -333,7 +343,8 @@ class RelayHandover:
             try:
                 assert self._proc is not None
                 self._propagate_winsize()
-                self._proc.write(b"\n")  # nudge a fresh prompt into view
+                # Sync to the panel dir, which also nudges a fresh prompt.
+                self._sync_cwd(cwd)
                 self._interactive_relay(
                     stdin_fd, self._proc.fd, sys.stdout.buffer
                 )
