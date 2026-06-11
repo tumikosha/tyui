@@ -3254,6 +3254,10 @@ class TyuiApp(App):
         self._handover.run_foreground(text, cwd)
         if self.command_history is not None:
             self.command_history.append(text)
+        # A command that changes directory (e.g. `pushd`, or a script ending in
+        # a `cd`) moves the active panel too — same as the literal `cd` above,
+        # and as User Menu entries.
+        self._follow_handover_cwd(cwd)
         self._refresh_panels()
 
     def _handover_cd(self, arg: str) -> None:

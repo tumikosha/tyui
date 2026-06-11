@@ -79,6 +79,25 @@ async def test_we_mc_cd_does_not_invoke_handover(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_we_mc_command_that_cds_moves_active_panel(tmp_path):
+    # A typed command that leaves the shell in another directory (the handover
+    # reports it via last_cwd) follows the active panel — like User Menu entries.
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    app = TyuiApp(launch_mode="we-mc", terminal_mode="suspend",
+                  initial_path=str(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        spy = _SpyHandover()
+        spy.last_cwd = sub
+        app._handover = spy
+        app._run_handover_command("pushd sub")
+        await pilot.pause()
+        assert spy.ran and spy.ran[0][0] == "pushd sub"
+        assert app._panel_cwd_for_test().resolve() == sub.resolve()
+
+
+@pytest.mark.asyncio
 async def test_we_mc_ctrl_o_shows_command_screen(tmp_path):
     app = TyuiApp(launch_mode="we-mc", terminal_mode="suspend")
     async with app.run_test() as pilot:
