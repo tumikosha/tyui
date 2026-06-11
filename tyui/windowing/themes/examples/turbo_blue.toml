@@ -84,3 +84,99 @@ bg = "#aaaaaa"
 [styles."menu.separator"]
 fg = "#555555"
 bg = "#aaaaaa"
+
+# --- Window decorations (on the navy window border) -------------------
+[styles."decoration.number"]
+fg = "#ffff55"
+bg = "#0000aa"
+bold = true
+
+# --- Status bar (black on gray, F-key chip white on red) --------------
+[styles."statusbar_bg"]
+fg = "#000000"
+bg = "#aaaaaa"
+[styles."statusbar_key"]
+fg = "#ffffff"
+bg = "#aa0000"
+bold = true
+[styles."statusbar_label"]
+fg = "#000000"
+bg = "#aaaaaa"
+
+# --- File-panel per-type colours (dark fg on the light-grey row base) -
+[styles."panel.file.dir"]
+fg = "#000088"
+bold = true
+[styles."panel.file.symlink"]
+fg = "#008080"
+[styles."panel.file.executable"]
+fg = "#007000"
+bold = true
+[styles."panel.file.archive"]
+fg = "#aa0000"
+[styles."panel.file.image"]
+fg = "#aa00aa"
+[styles."panel.file.media"]
+fg = "#7700cc"
+[styles."panel.file.document"]
+fg = "#806000"
+[styles."panel.file.source"]
+fg = "#0055aa"
+[styles."panel.file.config"]
+fg = "#555555"
+[styles."panel.file.hidden"]
+fg = "#666666"
+
+# --- Editor: cursor, selection, search, folds, gutter -----------------
+# The editor sits on window.content (black on light grey), so highlights
+# and syntax use DARK inks — bright colours would wash out on grey.
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+fg = "#ffffff"
+bg = "#0000aa"
+[styles."editor.selection_cursor"]
+fg = "#ffffff"
+bg = "#5555ff"
+bold = true
+[styles."editor.search_match"]
+fg = "#000000"
+bg = "#aaaa00"
+[styles."editor.search_current"]
+fg = "#000000"
+bg = "#ffff55"
+bold = true
+[styles."editor.fold_marker"]
+fg = "#aa0000"
+bg = "#aaaaaa"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#0000aa"
+bg = "#aaaaaa"
+
+# --- Editor: syntax highlighting (dark Borland inks on light grey) ----
+[styles."editor.syntax.keyword"]
+fg = "#0000aa"
+bold = true
+[styles."editor.syntax.name"]
+fg = "#000000"
+[styles."editor.syntax.function"]
+fg = "#aa00aa"
+bold = true
+[styles."editor.syntax.class"]
+fg = "#008080"
+bold = true
+[styles."editor.syntax.string"]
+fg = "#aa0000"
+[styles."editor.syntax.number"]
+fg = "#aa5500"
+[styles."editor.syntax.comment"]
+fg = "#007000"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#000000"
+[styles."editor.syntax.builtin"]
+fg = "#008080"
+[styles."editor.syntax.error"]
+fg = "#cc0000"
+bold = true

@@ -112,7 +112,7 @@ bg = "#ebcb8b"
 fg = "#d08770"
 bold = true
 [styles."editor.line_numbers"]
-fg = "#4c566a"
+fg = "#7b88a1"
 
 [styles."editor.syntax.keyword"]
 fg = "#81a1c1"
@@ -156,6 +156,6 @@ fg = "#a3be8c"
 [styles."panel.file.source"]
 fg = "#88c0d0"
 [styles."panel.file.config"]
-fg = "#616e88"
+fg = "#ebcb8b"
 [styles."panel.file.hidden"]
-fg = "#616e88"
+fg = "#7b88a1"

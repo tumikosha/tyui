@@ -62,7 +62,7 @@ fg = "#d7d787"
 [styles."panel.file.config"]
 fg = "#87afaf"
 [styles."panel.file.hidden"]
-fg = "#5f5f5f"
+fg = "#8a8a8a"
 
 [styles."decoration.close_box"]
 fg = "#af5f5f"
@@ -139,7 +139,7 @@ bg = "#d7875f"
 fg = "#d7875f"
 bold = true
 [styles."editor.line_numbers"]
-fg = "#5f5f5f"
+fg = "#8a8a8a"
 
 [styles."editor.syntax.keyword"]
 fg = "#af87af"

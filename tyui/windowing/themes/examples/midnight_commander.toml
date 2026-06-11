@@ -92,3 +92,97 @@ bg = "#00aaaa"
 [styles."menu.separator"]
 fg = "#555555"
 bg = "#00aaaa"
+
+# --- Window decorations ------------------------------------------------
+[styles."decoration.number"]
+fg = "#ffff55"
+bg = "#000080"
+bold = true
+
+# --- Status bar (MC: black on cyan, F-key numbers on black) -----------
+[styles."statusbar_bg"]
+fg = "#000000"
+bg = "#00aaaa"
+[styles."statusbar_key"]
+fg = "#ffffff"
+bg = "#000000"
+bold = true
+[styles."statusbar_label"]
+fg = "#000000"
+bg = "#00aaaa"
+
+# --- File-panel per-type colours (fg layered on the navy row base) ----
+[styles."panel.file.dir"]
+fg = "#ffffff"
+bold = true
+[styles."panel.file.symlink"]
+fg = "#55ffff"
+[styles."panel.file.executable"]
+fg = "#55ff55"
+bold = true
+[styles."panel.file.archive"]
+fg = "#ff5555"
+[styles."panel.file.image"]
+fg = "#ff55ff"
+[styles."panel.file.media"]
+fg = "#ffaaff"
+[styles."panel.file.document"]
+fg = "#ffff55"
+[styles."panel.file.source"]
+fg = "#aaffaa"
+[styles."panel.file.config"]
+fg = "#87d7d7"
+[styles."panel.file.hidden"]
+fg = "#8888aa"
+
+# --- Editor: cursor, selection, search, folds, gutter -----------------
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+fg = "#000000"
+bg = "#00aaaa"
+[styles."editor.selection_cursor"]
+fg = "#000000"
+bg = "#55ffff"
+bold = true
+[styles."editor.search_match"]
+fg = "#000000"
+bg = "#aaaa00"
+[styles."editor.search_current"]
+fg = "#000000"
+bg = "#ffff55"
+bold = true
+[styles."editor.fold_marker"]
+fg = "#ffff55"
+bg = "#000080"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#00aaaa"
+bg = "#000080"
+
+# --- Editor: syntax highlighting (Turbo-style brights on navy) --------
+[styles."editor.syntax.keyword"]
+fg = "#ffff55"
+bold = true
+[styles."editor.syntax.name"]
+fg = "#ffffff"
+[styles."editor.syntax.function"]
+fg = "#55ffff"
+bold = true
+[styles."editor.syntax.class"]
+fg = "#55ff55"
+bold = true
+[styles."editor.syntax.string"]
+fg = "#aaffaa"
+[styles."editor.syntax.number"]
+fg = "#ff55ff"
+[styles."editor.syntax.comment"]
+fg = "#aaaaaa"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#ffffff"
+[styles."editor.syntax.builtin"]
+fg = "#55ffff"
+[styles."editor.syntax.error"]
+fg = "#ff5555"
+bold = true
