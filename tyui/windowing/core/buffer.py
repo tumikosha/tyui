@@ -289,6 +289,10 @@ class TextBuffer:
         """
         if not text:
             return
+        # Terminal bracketed paste (Cmd+V) delivers line breaks as CR (\r), and
+        # CRLF text carries a trailing \r — normalise both to \n so multi-line
+        # pastes actually split into lines instead of collapsing onto one.
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         self._save_undo()
         paste_lines = text.split("\n")
         if len(paste_lines) == 1:

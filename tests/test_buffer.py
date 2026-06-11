@@ -48,6 +48,15 @@ class TestTextBufferInsertText:
         assert buf.lines == ["hello"]
         assert buf.modified is False
 
+    def test_insert_text_normalises_cr_newlines(self):
+        # Terminal bracketed paste (Cmd+V) sends line breaks as CR, and CRLF
+        # text carries a trailing \r — both must split into real lines.
+        for payload in ("a\rb\rc", "a\r\nb\r\nc"):
+            buf = TextBuffer.from_string("")
+            buf.insert_text(payload)
+            assert buf.lines == ["a", "b", "c"]
+            assert buf.cursor_row == 2
+
 
 class TestTextBufferInit:
     def test_empty_buffer(self):
