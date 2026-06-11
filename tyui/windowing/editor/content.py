@@ -137,6 +137,18 @@ class EditorContent(WindowContent):
         self._record("search", json.dumps(payload))
         self._macro_search_recorded = True
 
+    def apply_theme(self) -> None:
+        """Re-sync both editor panes to the active palette on a theme switch.
+
+        The base widget paints text from ``window.content`` via its own
+        ``apply_theme``; forward to each pane so a light/dark switch can't leave
+        the editor showing stale (e.g. light-on-light) colours.
+        """
+        for ed in (self._editor, self._editor2):
+            if ed is not None:
+                ed.apply_theme()
+        super().apply_theme()
+
     @property
     def is_split(self) -> bool:
         return self._editor2 is not None

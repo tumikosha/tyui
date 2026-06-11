@@ -162,10 +162,45 @@ class EditorWidget(ScrollView):
             return palette.rich_style(role)
         return RichStyle()
 
+    def _base_style(self) -> RichStyle:
+        """Themed fg+bg every text cell is painted on top of.
+
+        The widget's CSS leaves the foreground to Textual's app theme, which is
+        unrelated to our palette — on a light palette that would render the
+        default light text on a light window, i.e. invisible. Source the base
+        from ``window.content`` (every built-in theme defines it), falling back
+        to the widget's computed style only when no palette is reachable.
+        """
+        palette = self._get_palette()
+        if palette is None:
+            return self.rich_style
+        style = palette.get("window.content")
+        if style.fg is None and style.bg is None:
+            return self.rich_style
+        return style.to_rich()
+
+    def apply_theme(self) -> None:
+        """Sync the widget's own colours to the palette and repaint.
+
+        Called by ``Desktop.set_theme`` (via ``EditorContent.apply_theme``) on
+        every theme switch and once on mount, so ``self.rich_style`` — used for
+        blank gutter cells and past-EOL padding — tracks ``window.content``
+        instead of Textual's unrelated app theme.
+        """
+        palette = self._get_palette()
+        if palette is not None:
+            base = palette.get("window.content")
+            if base.fg is not None:
+                self.styles.color = base.fg
+            if base.bg is not None:
+                self.styles.background = base.bg
+        self.refresh()
+
     def on_mount(self) -> None:
         self._rescan_folds()
         self._detect_language()
         self._recompute_syntax()
+        self.apply_theme()
         self._refresh_render()
 
     def on_unmount(self) -> None:
@@ -310,13 +345,13 @@ class EditorWidget(ScrollView):
 
     def render_line(self, y: int) -> Strip:
         rendered_idx = y + self.scroll_offset.y
+        base = self._base_style()
         if rendered_idx >= len(self._rendered_lines):
-            return Strip.blank(self.size.width, self.rich_style)
+            return Strip.blank(self.size.width, base)
 
         line = self._rendered_lines[rendered_idx]
         buf_row = self._rendered_row_to_buffer_row(rendered_idx)
         gutter = self._gutter_width()
-        base = self.rich_style
         n = len(line)
 
         # Per-column style array; index n is a slot for a cursor/marker past EOL.
