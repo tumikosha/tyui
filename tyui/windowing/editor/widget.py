@@ -84,10 +84,16 @@ class EditorWidget(ScrollView):
         Binding("ctrl+shift+z", "redo", "Redo", show=False),
         Binding("ctrl+left_square_bracket", "fold_all", "Fold All", show=False),
         Binding("ctrl+right_square_bracket", "smart_fold", "Smart Fold", show=False),
-        # Copy/Paste shortcuts
+        # Copy/Paste shortcuts. The super+* (Cmd) aliases work in terminals
+        # that report the Cmd key (kitty keyboard protocol: iTerm2, Ghostty,
+        # Kitty, WezTerm). macOS Terminal.app intercepts Cmd+C itself, so it
+        # never reaches the app there — use Ctrl+C instead.
         Binding("ctrl+c", "copy", "Copy", show=False),
+        Binding("super+c", "copy", "Copy", show=False),
         Binding("ctrl+x", "cut", "Cut", show=False),
+        Binding("super+x", "cut", "Cut", show=False),
         Binding("ctrl+v", "paste", "Paste", show=False),
+        Binding("super+v", "paste", "Paste", show=False),
     ]
 
     show_line_numbers: reactive[bool] = reactive(True)

@@ -35,6 +35,14 @@ def test_editor_widget_gutter_width_no_line_numbers():
     assert widget._gutter_width() == 0
 
 
+def test_editor_has_cmd_clipboard_bindings():
+    # Cmd (super) aliases for copy/cut/paste, for kitty-protocol terminals.
+    actions = {b.key: b.action for b in EditorWidget.BINDINGS}
+    assert actions.get("super+c") == "copy"
+    assert actions.get("super+x") == "cut"
+    assert actions.get("super+v") == "paste"
+
+
 def test_move_cursor_document_start():
     buf = TextBuffer.from_string("alpha\nbeta\ngamma")
     buf.cursor_row, buf.cursor_col = 1, 3
