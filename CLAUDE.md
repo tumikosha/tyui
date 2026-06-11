@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Workflow rules
+
+- **Never `git push` without a direct, current instruction.** Commit only when
+  asked; after committing, stop and let the user decide whether/when to push. A
+  prior "push it" applies only to that batch — it does not carry over to later
+  commits.
+
 ## Project
 
 `tyui` — terminal text editor + Norton Commander/mc-style file manager built on
