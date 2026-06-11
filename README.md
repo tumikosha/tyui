@@ -164,6 +164,42 @@ tyui/
 See [`CLAUDE.md`](./CLAUDE.md) for an architecture deep-dive aimed at
 contributors and AI coding assistants.
 
+## Terminal limitations on macOS
+
+macOS **Terminal.app** does not report several modifier+key combinations to
+the application, so some editor shortcuts can't reach `tyui` there:
+
+- `Shift+↑` / `Shift+↓` / `Shift+Home` / `Shift+End` — selection by line / to
+  start/end of line. Terminal.app sends the same sequence as the unmodified
+  key, so the selection variant never arrives.
+- `Cmd+C`, `Cmd+↑` / `Cmd+↓` — the terminal intercepts `Cmd` shortcuts itself
+  and never forwards them.
+
+You can confirm what your terminal sends with `cat -v` (press the combo, then
+`Ctrl+C` to quit): if `Shift+↑` prints `^[[A` (same as plain `↑`) the modifier
+is being dropped.
+
+**Two fixes:**
+
+1. **Use a terminal that supports the kitty keyboard protocol** — iTerm2,
+   Ghostty, Kitty, WezTerm. These deliver `Shift+arrows` and `Cmd+arrows`/`Cmd+C`
+   out of the box, no configuration needed. (Recommended.)
+
+2. **Remap the keys in Terminal.app** — Settings → Profiles → *your profile* →
+   **Keyboard** → **+**, with Action *Send Text* (`\033` is the Esc character):
+
+| Key    | Modifier | Send Text   |
+|--------|----------|-------------|
+| `↑`    | Shift    | `\033[1;2A` |
+| `↓`    | Shift    | `\033[1;2B` |
+| `Home` | Shift    | `\033[1;2H` |
+| `End`  | Shift    | `\033[1;2F` |
+
+`Cmd+C` can't be remapped this way (Terminal.app keeps it for its own Copy). In
+the editor and command line use `Ctrl+C` to copy instead — in the command line
+`Ctrl+C` copies the current selection and otherwise cancels/clears, like a
+shell.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
