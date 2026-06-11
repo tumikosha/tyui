@@ -1,0 +1,162 @@
+# Spring — fresh leaf-green background with blossom and sky accents.
+# A light seasonal theme whose background carries the season.
+
+[theme]
+name = "spring"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#bfdda6"
+[styles."desktop.pattern"]
+fg = "#a9cd8c"
+bg = "#bfdda6"
+
+[styles."window.border.focused"]
+fg = "#25331a"
+bg = "#d9edca"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#7f9468"
+bg = "#d9edca"
+
+[styles."window.title.focused"]
+fg = "#356b1a"
+bg = "#d9edca"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#5f7048"
+bg = "#d9edca"
+[styles."window.subtitle"]
+fg = "#5f7048"
+bg = "#d9edca"
+
+[styles."window.content"]
+fg = "#25331a"
+bg = "#d9edca"
+
+[styles."decoration.close_box"]
+fg = "#a83228"
+bg = "#d9edca"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#356b1a"
+bg = "#d9edca"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#7f9468"
+bg = "#d9edca"
+[styles."decoration.number"]
+fg = "#5f7048"
+bg = "#d9edca"
+
+[styles."icon_tray.background"]
+bg = "#cce4ba"
+[styles."icon.normal"]
+fg = "#25331a"
+bg = "#cce4ba"
+[styles."icon.hover"]
+fg = "#d9edca"
+bg = "#356b1a"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#25331a"
+bg = "#cce4ba"
+[styles."menu.item"]
+fg = "#25331a"
+bg = "#cce4ba"
+[styles."menu.item.active"]
+fg = "#d9edca"
+bg = "#356b1a"
+bold = true
+[styles."menu.hotkey"]
+fg = "#a83228"
+bg = "#cce4ba"
+[styles."menu.dropdown.border"]
+fg = "#7f9468"
+bg = "#d9edca"
+[styles."menu.separator"]
+fg = "#a9cd8c"
+bg = "#d9edca"
+
+[styles."statusbar_bg"]
+fg = "#25331a"
+bg = "#cce4ba"
+[styles."statusbar_key"]
+fg = "#d9edca"
+bg = "#356b1a"
+bold = true
+[styles."statusbar_label"]
+fg = "#25331a"
+bg = "#cce4ba"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#bfe0a2"
+[styles."editor.selection_cursor"]
+bg = "#bfe0a2"
+reverse = true
+[styles."editor.search_match"]
+bg = "#e3dc92"
+[styles."editor.search_current"]
+bg = "#ecc24c"
+[styles."editor.fold_marker"]
+fg = "#a85a00"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#5f7048"
+
+[styles."editor.syntax.keyword"]
+fg = "#9a3d86"
+[styles."editor.syntax.name"]
+fg = "#25331a"
+[styles."editor.syntax.function"]
+fg = "#245fa0"
+[styles."editor.syntax.class"]
+fg = "#876010"
+[styles."editor.syntax.string"]
+fg = "#356b1a"
+[styles."editor.syntax.number"]
+fg = "#a83228"
+[styles."editor.syntax.comment"]
+fg = "#5f7048"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#25331a"
+[styles."editor.syntax.builtin"]
+fg = "#1f7a6a"
+[styles."editor.syntax.error"]
+fg = "#b5302a"
+
+# File-panel per-type colours
+[styles."panel.file.dir"]
+fg = "#245fa0"
+bold = true
+[styles."panel.file.symlink"]
+fg = "#1f7a6a"
+[styles."panel.file.executable"]
+fg = "#356b1a"
+bold = true
+[styles."panel.file.archive"]
+fg = "#a83228"
+[styles."panel.file.image"]
+fg = "#9a3d86"
+[styles."panel.file.media"]
+fg = "#6f3f9a"
+[styles."panel.file.document"]
+fg = "#876010"
+[styles."panel.file.source"]
+fg = "#b04070"
+[styles."panel.file.config"]
+fg = "#a85a00"
+[styles."panel.file.hidden"]
+fg = "#5f7048"

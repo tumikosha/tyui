@@ -1,0 +1,162 @@
+# Tokyo Night — cool neon blues and violets on a deep night-sky base.
+# https://github.com/enkia/tokyo-night-vscode-theme
+
+[theme]
+name = "tokyo_night"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#16161e"
+[styles."desktop.pattern"]
+fg = "#292e42"
+bg = "#16161e"
+
+[styles."window.border.focused"]
+fg = "#c0caf5"
+bg = "#1a1b26"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#545c7e"
+bg = "#1a1b26"
+
+[styles."window.title.focused"]
+fg = "#7aa2f7"
+bg = "#1a1b26"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#737aa2"
+bg = "#1a1b26"
+[styles."window.subtitle"]
+fg = "#737aa2"
+bg = "#1a1b26"
+
+[styles."window.content"]
+fg = "#c0caf5"
+bg = "#1a1b26"
+
+[styles."decoration.close_box"]
+fg = "#f7768e"
+bg = "#1a1b26"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#9ece6a"
+bg = "#1a1b26"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#545c7e"
+bg = "#1a1b26"
+[styles."decoration.number"]
+fg = "#737aa2"
+bg = "#1a1b26"
+
+[styles."icon_tray.background"]
+bg = "#16161e"
+[styles."icon.normal"]
+fg = "#c0caf5"
+bg = "#16161e"
+[styles."icon.hover"]
+fg = "#1a1b26"
+bg = "#7aa2f7"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#c0caf5"
+bg = "#292e42"
+[styles."menu.item"]
+fg = "#c0caf5"
+bg = "#292e42"
+[styles."menu.item.active"]
+fg = "#1a1b26"
+bg = "#7aa2f7"
+bold = true
+[styles."menu.hotkey"]
+fg = "#ff9e64"
+bg = "#292e42"
+[styles."menu.dropdown.border"]
+fg = "#545c7e"
+bg = "#292e42"
+[styles."menu.separator"]
+fg = "#3b4261"
+bg = "#292e42"
+
+[styles."statusbar_bg"]
+fg = "#c0caf5"
+bg = "#292e42"
+[styles."statusbar_key"]
+fg = "#1a1b26"
+bg = "#7aa2f7"
+bold = true
+[styles."statusbar_label"]
+fg = "#c0caf5"
+bg = "#292e42"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#283457"
+[styles."editor.selection_cursor"]
+bg = "#283457"
+reverse = true
+[styles."editor.search_match"]
+bg = "#3d59a1"
+[styles."editor.search_current"]
+bg = "#e0af68"
+[styles."editor.fold_marker"]
+fg = "#ff9e64"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#737aa2"
+
+[styles."editor.syntax.keyword"]
+fg = "#bb9af7"
+[styles."editor.syntax.name"]
+fg = "#c0caf5"
+[styles."editor.syntax.function"]
+fg = "#7aa2f7"
+[styles."editor.syntax.class"]
+fg = "#2ac3de"
+[styles."editor.syntax.string"]
+fg = "#9ece6a"
+[styles."editor.syntax.number"]
+fg = "#ff9e64"
+[styles."editor.syntax.comment"]
+fg = "#7982a9"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#89ddff"
+[styles."editor.syntax.builtin"]
+fg = "#73daca"
+[styles."editor.syntax.error"]
+fg = "#f7768e"
+
+# File-panel per-type colours
+[styles."panel.file.dir"]
+fg = "#7aa2f7"
+bold = true
+[styles."panel.file.symlink"]
+fg = "#7dcfff"
+[styles."panel.file.executable"]
+fg = "#9ece6a"
+bold = true
+[styles."panel.file.archive"]
+fg = "#f7768e"
+[styles."panel.file.image"]
+fg = "#bb9af7"
+[styles."panel.file.media"]
+fg = "#9d7cd8"
+[styles."panel.file.document"]
+fg = "#e0af68"
+[styles."panel.file.source"]
+fg = "#73daca"
+[styles."panel.file.config"]
+fg = "#ff9e64"
+[styles."panel.file.hidden"]
+fg = "#737aa2"

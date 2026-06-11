@@ -1,0 +1,162 @@
+# Catppuccin Mocha — soft, warm pastels on a deep indigo base.
+# https://github.com/catppuccin/catppuccin
+
+[theme]
+name = "catppuccin_mocha"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#181825"
+[styles."desktop.pattern"]
+fg = "#313244"
+bg = "#181825"
+
+[styles."window.border.focused"]
+fg = "#cdd6f4"
+bg = "#1e1e2e"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#585b70"
+bg = "#1e1e2e"
+
+[styles."window.title.focused"]
+fg = "#cba6f7"
+bg = "#1e1e2e"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#7f849c"
+bg = "#1e1e2e"
+[styles."window.subtitle"]
+fg = "#7f849c"
+bg = "#1e1e2e"
+
+[styles."window.content"]
+fg = "#cdd6f4"
+bg = "#1e1e2e"
+
+[styles."decoration.close_box"]
+fg = "#f38ba8"
+bg = "#1e1e2e"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#a6e3a1"
+bg = "#1e1e2e"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#6c7086"
+bg = "#1e1e2e"
+[styles."decoration.number"]
+fg = "#7f849c"
+bg = "#1e1e2e"
+
+[styles."icon_tray.background"]
+bg = "#181825"
+[styles."icon.normal"]
+fg = "#cdd6f4"
+bg = "#181825"
+[styles."icon.hover"]
+fg = "#1e1e2e"
+bg = "#89b4fa"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#cdd6f4"
+bg = "#313244"
+[styles."menu.item"]
+fg = "#cdd6f4"
+bg = "#313244"
+[styles."menu.item.active"]
+fg = "#1e1e2e"
+bg = "#cba6f7"
+bold = true
+[styles."menu.hotkey"]
+fg = "#fab387"
+bg = "#313244"
+[styles."menu.dropdown.border"]
+fg = "#585b70"
+bg = "#313244"
+[styles."menu.separator"]
+fg = "#45475a"
+bg = "#313244"
+
+[styles."statusbar_bg"]
+fg = "#cdd6f4"
+bg = "#313244"
+[styles."statusbar_key"]
+fg = "#1e1e2e"
+bg = "#89b4fa"
+bold = true
+[styles."statusbar_label"]
+fg = "#cdd6f4"
+bg = "#313244"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#45475a"
+[styles."editor.selection_cursor"]
+bg = "#45475a"
+reverse = true
+[styles."editor.search_match"]
+bg = "#585b70"
+[styles."editor.search_current"]
+bg = "#f9e2af"
+[styles."editor.fold_marker"]
+fg = "#fab387"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#7f849c"
+
+[styles."editor.syntax.keyword"]
+fg = "#cba6f7"
+[styles."editor.syntax.name"]
+fg = "#cdd6f4"
+[styles."editor.syntax.function"]
+fg = "#89b4fa"
+[styles."editor.syntax.class"]
+fg = "#f9e2af"
+[styles."editor.syntax.string"]
+fg = "#a6e3a1"
+[styles."editor.syntax.number"]
+fg = "#fab387"
+[styles."editor.syntax.comment"]
+fg = "#9399b2"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#89dceb"
+[styles."editor.syntax.builtin"]
+fg = "#94e2d5"
+[styles."editor.syntax.error"]
+fg = "#f38ba8"
+
+# File-panel per-type colours
+[styles."panel.file.dir"]
+fg = "#89b4fa"
+bold = true
+[styles."panel.file.symlink"]
+fg = "#89dceb"
+[styles."panel.file.executable"]
+fg = "#a6e3a1"
+bold = true
+[styles."panel.file.archive"]
+fg = "#f38ba8"
+[styles."panel.file.image"]
+fg = "#cba6f7"
+[styles."panel.file.media"]
+fg = "#f5c2e7"
+[styles."panel.file.document"]
+fg = "#f9e2af"
+[styles."panel.file.source"]
+fg = "#94e2d5"
+[styles."panel.file.config"]
+fg = "#fab387"
+[styles."panel.file.hidden"]
+fg = "#7f849c"

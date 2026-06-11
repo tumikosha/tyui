@@ -1,0 +1,162 @@
+# Winter — icy blue background with navy, frost teal and cool accents.
+# A light seasonal theme whose background carries the season.
+
+[theme]
+name = "winter"
+[theme.borders]
+focused = "double"
+unfocused = "single"
+[theme.pattern]
+kind = "solid"
+
+[styles."desktop.background"]
+bg = "#bcd4ec"
+[styles."desktop.pattern"]
+fg = "#a8c6e3"
+bg = "#bcd4ec"
+
+[styles."window.border.focused"]
+fg = "#20303f"
+bg = "#d2e4f3"
+bold = true
+[styles."window.border.unfocused"]
+fg = "#7e93ab"
+bg = "#d2e4f3"
+
+[styles."window.title.focused"]
+fg = "#1f3f8a"
+bg = "#d2e4f3"
+bold = true
+[styles."window.title.unfocused"]
+fg = "#5d6f86"
+bg = "#d2e4f3"
+[styles."window.subtitle"]
+fg = "#5d6f86"
+bg = "#d2e4f3"
+
+[styles."window.content"]
+fg = "#20303f"
+bg = "#d2e4f3"
+
+[styles."decoration.close_box"]
+fg = "#a83a4a"
+bg = "#d2e4f3"
+bold = true
+[styles."decoration.zoom_box"]
+fg = "#2f7d5a"
+bg = "#d2e4f3"
+bold = true
+[styles."decoration.resize_grip"]
+fg = "#7e93ab"
+bg = "#d2e4f3"
+[styles."decoration.number"]
+fg = "#5d6f86"
+bg = "#d2e4f3"
+
+[styles."icon_tray.background"]
+bg = "#c8dcf0"
+[styles."icon.normal"]
+fg = "#20303f"
+bg = "#c8dcf0"
+[styles."icon.hover"]
+fg = "#d2e4f3"
+bg = "#1f3f8a"
+bold = true
+
+[styles."modal.overlay"]
+bg = "#000000"
+dim = true
+
+[styles."menu.bar"]
+fg = "#20303f"
+bg = "#c8dcf0"
+[styles."menu.item"]
+fg = "#20303f"
+bg = "#c8dcf0"
+[styles."menu.item.active"]
+fg = "#d2e4f3"
+bg = "#1f3f8a"
+bold = true
+[styles."menu.hotkey"]
+fg = "#a83a4a"
+bg = "#c8dcf0"
+[styles."menu.dropdown.border"]
+fg = "#7e93ab"
+bg = "#d2e4f3"
+[styles."menu.separator"]
+fg = "#a8c6e3"
+bg = "#d2e4f3"
+
+[styles."statusbar_bg"]
+fg = "#20303f"
+bg = "#c8dcf0"
+[styles."statusbar_key"]
+fg = "#d2e4f3"
+bg = "#1f3f8a"
+bold = true
+[styles."statusbar_label"]
+fg = "#20303f"
+bg = "#c8dcf0"
+
+[styles."editor.cursor"]
+reverse = true
+[styles."editor.selection"]
+bg = "#bcd6ee"
+[styles."editor.selection_cursor"]
+bg = "#bcd6ee"
+reverse = true
+[styles."editor.search_match"]
+bg = "#d6e0b8"
+[styles."editor.search_current"]
+bg = "#d4b240"
+[styles."editor.fold_marker"]
+fg = "#1f3f8a"
+bold = true
+[styles."editor.line_numbers"]
+fg = "#5d6f86"
+
+[styles."editor.syntax.keyword"]
+fg = "#1f3f8a"
+[styles."editor.syntax.name"]
+fg = "#20303f"
+[styles."editor.syntax.function"]
+fg = "#2f6fb0"
+[styles."editor.syntax.class"]
+fg = "#1a7f8f"
+[styles."editor.syntax.string"]
+fg = "#2f7d5a"
+[styles."editor.syntax.number"]
+fg = "#a83a4a"
+[styles."editor.syntax.comment"]
+fg = "#5d6f86"
+italic = true
+[styles."editor.syntax.operator"]
+fg = "#20303f"
+[styles."editor.syntax.builtin"]
+fg = "#6a4aa8"
+[styles."editor.syntax.error"]
+fg = "#a83a4a"
+
+# File-panel per-type colours
+[styles."panel.file.dir"]
+fg = "#1f3f8a"
+bold = true
+[styles."panel.file.symlink"]
+fg = "#1f7f8f"
+[styles."panel.file.executable"]
+fg = "#2f7d5a"
+bold = true
+[styles."panel.file.archive"]
+fg = "#a83a4a"
+[styles."panel.file.image"]
+fg = "#6a4aa8"
+[styles."panel.file.media"]
+fg = "#8a4a8a"
+[styles."panel.file.document"]
+fg = "#7a5a20"
+[styles."panel.file.source"]
+fg = "#2f6fb0"
+[styles."panel.file.config"]
+fg = "#1a6f7a"
+[styles."panel.file.hidden"]
+fg = "#5d6f86"
