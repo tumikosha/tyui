@@ -185,9 +185,19 @@ class FilePanel(WindowContent):
     def refresh_listing(self) -> None:
         """Re-scan cwd, re-sort, clamp cursor, prune stale selections."""
         provider = self._registry.resolve(self.cwd_loc)
-        raw = provider.scan(
-            self.cwd_loc, show_hidden=self.show_hidden, include_parent=True
-        )
+        try:
+            raw = provider.scan(
+                self.cwd_loc, show_hidden=self.show_hidden, include_parent=True
+            )
+        except Exception as exc:
+            # A provider scan must never crash the TUI (network drop, protocol
+            # error, …). Degrade to an empty listing — Backspace/ascend still
+            # works (it uses cwd_loc, not the entries) so the user can back out.
+            raw = []
+            try:
+                self.app.notify(f"Listing failed: {exc}", severity="warning")
+            except Exception:
+                pass  # unmounted (no active app) or notify unavailable
         self.entries = MaterializedRowSource(
             sort_entries(raw, self.sort_order, descending=self.sort_descending)
         )

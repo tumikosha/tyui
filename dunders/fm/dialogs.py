@@ -387,6 +387,7 @@ class InputDialog(Container, WindowContent):
         *,
         initial: str = "",
         context: object | None = None,
+        password: bool = False,
     ) -> None:
         super().__init__()
         self.prompt = prompt
@@ -394,7 +395,7 @@ class InputDialog(Container, WindowContent):
         # Caller-supplied payload — same idea as ConfirmDialog.context.
         self.context = context
         self.window_title = prompt
-        self._input = Input(id="input-dialog-input")
+        self._input = Input(id="input-dialog-input", password=password)
 
     def compose(self) -> ComposeResult:
         yield self._input

@@ -214,7 +214,9 @@ class ZipProvider:
 
     # -- prefix target (zip:<name> creates a new archive) -----------------
 
-    def resolve_target(self, spec: str, *, base: VfsPath) -> VfsPath | None:
+    def resolve_target(
+        self, spec: str, *, base: VfsPath, password: str | None = None
+    ) -> VfsPath | None:
         """``zip:<name>`` → a locator for a new ``.zip`` under ``base``.
 
         ``base`` must be a local directory (you cannot create an archive inside

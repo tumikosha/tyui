@@ -117,8 +117,12 @@ class TargetResolver(Protocol):
 
     scheme: str
 
-    def resolve_target(self, spec: str, *, base: VfsPath) -> VfsPath | None:
+    def resolve_target(
+        self, spec: str, *, base: VfsPath, password: str | None = None
+    ) -> VfsPath | None:
         """``spec`` is the text after ``<scheme>:``. ``base`` is the destination
-        panel's location (where a relative target is created). Return the target
-        locator, or ``None`` if this provider can't take ``spec`` here."""
+        panel's location (where a relative target is created). ``password`` is a
+        prompted secret for providers that need one (see ``needs_password``);
+        others ignore it. Return the target locator, or ``None`` if this
+        provider can't take ``spec`` here."""
         ...

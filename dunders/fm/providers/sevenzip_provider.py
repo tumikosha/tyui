@@ -240,7 +240,9 @@ class SevenZipProvider:
         name = loc.parts[-1]
         return any(n.name == name and n.is_dir for n in index.get(parent, []))
 
-    def resolve_target(self, spec: str, *, base: VfsPath) -> VfsPath | None:
+    def resolve_target(
+        self, spec: str, *, base: VfsPath, password: str | None = None
+    ) -> VfsPath | None:
         """``7z:<name>`` → a locator for a ``.7z`` under ``base`` (create-or-open).
 
         An absent archive is materialised empty (``7z a`` with no files) so the

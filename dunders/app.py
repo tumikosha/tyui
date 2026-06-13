@@ -186,6 +186,15 @@ class OpenDunderRequest:
 
 
 @dataclass(frozen=True)
+class DunderPasswordRequest:
+    """A masked password prompt chained after OpenDunderRequest when the
+    provider needs credentials (e.g. FTP user without an inline password)."""
+
+    scheme: str
+    spec: str
+
+
+@dataclass(frozen=True)
 class MkdirRequest:
     parent: Path
 
@@ -759,6 +768,10 @@ class DundersApp(App):
                 target = Path(raw).expanduser()
                 if not target.is_dir():
                     self._open_editor_window(target, read_only=False)
+            return
+        if isinstance(ctx, DunderPasswordRequest):
+            self._close_modal(event.dialog)
+            self._do_open_dunder(ctx.scheme, ctx.spec, password=event.value)
             return
         self._close_modal(event.dialog)
 
@@ -1977,7 +1990,7 @@ class DundersApp(App):
         show_modal(self.desktop, dialog, title=label, size=(60, 7))
         self.call_after_refresh(dialog.focus_input)
 
-    def _do_open_dunder(self, scheme: str, spec: str) -> None:
+    def _do_open_dunder(self, scheme: str, spec: str, *, password: str | None = None) -> None:
         panel = self._active_panel()
         if panel is None:
             return
@@ -1985,14 +1998,36 @@ class DundersApp(App):
         resolver = getattr(provider, "resolve_target", None)
         if resolver is None:
             return
+        # Provider needs a secret (e.g. FTP user without an inline password) and
+        # none supplied yet → prompt for it, then re-enter with the password.
+        needs = getattr(provider, "needs_password", None)
+        if password is None and callable(needs) and needs(spec):
+            self._prompt_dunder_password(scheme, spec)
+            return
         try:
-            target = resolver(spec.strip(), base=panel.cwd_loc)
-        except Exception:
-            target = None
+            target = resolver(spec.strip(), base=panel.cwd_loc, password=password)
+        except Exception as exc:
+            # Operational failure (bad host, refused, auth, timeout): show the
+            # provider's specific reason rather than a generic message.
+            self.notify(str(exc) or f"Cannot open {spec!r}", severity="error")
+            return
         if target is None:
+            # The provider couldn't interpret the spec at all.
             self.notify(f"Cannot open {spec!r}", severity="warning")
             return
         panel._change_cwd_loc(target)
+
+    def _prompt_dunder_password(self, scheme: str, spec: str) -> None:
+        if self.desktop is None:
+            return
+        self._remember_active_panel_id()
+        dialog = InputDialog(
+            "Password:",
+            context=DunderPasswordRequest(scheme=scheme, spec=spec),
+            password=True,
+        )
+        show_modal(self.desktop, dialog, title="Password", size=(50, 5))
+        self.call_after_refresh(dialog.focus_input)
 
     def action_new(self) -> None:
         if self._has_active_modal():
