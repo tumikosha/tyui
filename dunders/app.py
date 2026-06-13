@@ -25,6 +25,7 @@ from textual.containers import Vertical
 from textual.geometry import Offset, Size
 from textual.strip import Strip
 
+from dunders.core.plugins import EventBus, PluginApi, load_plugins
 from dunders.core.vfs import VfsPath
 from dunders.fm.actions import (
     OpResult,
@@ -355,6 +356,15 @@ class DundersApp(App):
         self.terminal_mode: TerminalMode = terminal_mode
         # VFS provider registry for file operations routed through transfer().
         self._vfs_registry = default_registry()
+        # Plugin runtime: an event bus + the narrow PluginApi handed to each
+        # discovered dunder. Plugins register before panels are built (below in
+        # _add_panel_windows), so a plugin-added provider is live from startup.
+        # Set DUNDERS_NO_PLUGINS=1 to skip discovery (CI / bisecting).
+        self.events = EventBus()
+        self.plugin_api = PluginApi(vfs=self._vfs_registry, events=self.events)
+        self.loaded_plugins: list[str] = []
+        if not os.environ.get("DUNDERS_NO_PLUGINS"):
+            self.loaded_plugins = load_plugins(self.plugin_api)
         # The active terminal-handover strategy in we-mc mode (None otherwise).
         self._handover = None
         self.desktop: Desktop | None = None
@@ -688,6 +698,8 @@ class DundersApp(App):
         self._close_modal(progress)
         self._report_op_result(op, result)
         self._refresh_panels()
+        # Notify plugins (e.g. __office__ playing a sound on a successful copy).
+        self.events.emit(f"op.{op}.done", result)
 
     def on_input_dialog_submitted(self, event: InputDialog.Submitted) -> None:
         ctx = event.dialog.context
@@ -1486,12 +1498,14 @@ class DundersApp(App):
     def _add_panel_windows(self, cwd: Path, *, visible: bool) -> None:
         assert self.desktop is not None
         left = make_window(
-            FilePanel(cwd=cwd), title=str(cwd), position=(0, 0), size=(40, 12),
+            FilePanel(cwd=cwd, registry=self._vfs_registry),
+            title=str(cwd), position=(0, 0), size=(40, 12),
             decorations=Decorations(close_box=True, copy_box=True),
             id="panel-left",
         )
         right = make_window(
-            FilePanel(cwd=cwd), title=str(cwd), position=(40, 0), size=(40, 12),
+            FilePanel(cwd=cwd, registry=self._vfs_registry),
+            title=str(cwd), position=(40, 0), size=(40, 12),
             decorations=Decorations(close_box=True, copy_box=True),
             id="panel-right",
         )
