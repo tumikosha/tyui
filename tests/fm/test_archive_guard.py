@@ -90,7 +90,9 @@ async def test_f3_view_binary_member_declined(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_f4_edit_inside_zip_does_not_open_editor(tmp_path):
+async def test_f4_edit_inside_zip_opens_editable_editor(tmp_path):
+    # zip is writable, so F4 on a member now opens an editor (edit-in-place),
+    # rather than the old "blocked" behaviour.
     _make_archive(tmp_path)
     app = DundersApp(launch_mode="fm", initial_path=str(tmp_path))
     async with app.run_test() as pilot:
@@ -101,7 +103,7 @@ async def test_f4_edit_inside_zip_does_not_open_editor(tmp_path):
         before = _editor_count(app)
         app.action_edit()  # must not raise
         await pilot.pause()
-        assert _editor_count(app) == before
+        assert _editor_count(app) == before + 1
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ generic cross-provider transfer rather than silently failing.
 from __future__ import annotations
 
 import io
+import os
 import threading
 import time
 import zipfile
@@ -101,25 +102,47 @@ class _ZipMemberWriter(io.BytesIO):
     the ``with`` block exits.
     """
 
-    def __init__(self, archive: str, inner: str) -> None:
+    def __init__(self, archive: str, inner: str, *, overwrite: bool = False) -> None:
         super().__init__()
         self._archive = archive
         self._inner = inner
+        self._overwrite = overwrite
         self._flushed = False
 
     def close(self) -> None:
         if not self._flushed and not self.closed:
             self._flushed = True
             data = self.getvalue()
-            with zipfile.ZipFile(self._archive, "a") as zf:
-                zf.writestr(self._inner, data)
+            if self._overwrite:
+                _replace_member(self._archive, self._inner, data)
+            else:
+                with zipfile.ZipFile(self._archive, "a") as zf:
+                    zf.writestr(self._inner, data)
         super().close()
+
+
+def _replace_member(archive: str, inner: str, data: bytes) -> None:
+    """Rewrite ``archive`` with ``inner`` replaced (zipfile can't edit in place).
+
+    Copies every other member into a sibling temp archive, adds the new bytes,
+    then atomically swaps it in.
+    """
+    tmp = archive + ".tmp"
+    with zipfile.ZipFile(archive, "r") as src, \
+         zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            if item.filename == inner:
+                continue
+            dst.writestr(item, src.read(item.filename))
+        dst.writestr(inner, data)
+    os.replace(tmp, archive)
 
 
 class ZipProvider:
     """Read/append ``VfsProvider`` for zip archives (structural conformance)."""
 
     scheme = "zip"
+    display_name = "Zip archiver"
     capabilities = frozenset({"read", "stream", "write"})
 
     def __init__(self) -> None:
@@ -189,23 +212,52 @@ class ZipProvider:
             data = zf.read(inner)
         return io.BytesIO(data)
 
+    # -- prefix target (zip:<name> creates a new archive) -----------------
+
+    def resolve_target(self, spec: str, *, base: VfsPath) -> VfsPath | None:
+        """``zip:<name>`` → a locator for a new ``.zip`` under ``base``.
+
+        ``base`` must be a local directory (you cannot create an archive inside
+        another archive). The file is created lazily by the first member write.
+        """
+        if base.scheme != "file":
+            return None
+        name = (spec or "").strip() or "archive.zip"
+        if not name.lower().endswith(".zip"):
+            name += ".zip"
+        path = Path(name).expanduser()
+        if not path.is_absolute():
+            path = base.to_local() / path
+        # Create-or-open: an absent archive is materialised empty so the panel
+        # can browse it immediately (the "_" menu opens it with no copy).
+        if not path.exists():
+            try:
+                with zipfile.ZipFile(path, "w"):
+                    pass
+            except OSError:
+                return None
+        return VfsPath(scheme="zip", root=str(path), parts=())
+
     # -- write (append-only) ----------------------------------------------
 
-    def open_write(self, loc: VfsPath, *, size_hint: int | None = None) -> BinaryIO:
-        """Return a writer that appends ``loc`` to the archive on close.
+    def open_write(
+        self, loc: VfsPath, *, size_hint: int | None = None, overwrite: bool = False
+    ) -> BinaryIO:
+        """Return a writer for ``loc`` flushed to the archive on close.
 
-        Append-only: a member whose name already exists is refused (we never
-        rewrite the archive to overwrite). The bytes are buffered in memory and
-        flushed via ``writestr`` when the writer closes — fine for the file
-        sizes a panel copy deals with.
+        Default is append-only: an existing member name is refused. With
+        ``overwrite=True`` (editing a member in place) the writer rewrites the
+        archive with that member replaced. Bytes are buffered in memory — fine
+        for the file sizes a panel/editor deals with.
         """
         inner = "/".join(loc.parts)
         if not inner:
             raise OSError("cannot write the archive root as a member")
-        with zipfile.ZipFile(loc.root, "a") as zf:
-            if inner in zf.namelist():
-                raise FileExistsError(f"{inner} already exists in archive")
-        return _ZipMemberWriter(loc.root, inner)
+        if not overwrite:
+            with zipfile.ZipFile(loc.root, "a") as zf:
+                if inner in zf.namelist():
+                    raise FileExistsError(f"{inner} already exists in archive")
+        return _ZipMemberWriter(loc.root, inner, overwrite=overwrite)
 
     def mkdir(self, parent: VfsPath, name: str) -> OpResult:
         """Add an explicit ``dir/`` entry, preserving empty directories.

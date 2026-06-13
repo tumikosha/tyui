@@ -179,6 +179,14 @@ class PackRequest:
 
 
 @dataclass(frozen=True)
+class OpenDunderRequest:
+    """Open a dunder (provider) in the active panel from the "_" menu: prompt
+    for a spec, then resolve_target it and navigate the panel into the result."""
+
+    scheme: str
+
+
+@dataclass(frozen=True)
 class MkdirRequest:
     parent: Path
 
@@ -551,23 +559,56 @@ class DundersApp(App):
         if not isinstance(ctx, CopyMoveRequest):
             return
         raw = (event.value or "").strip()
-        # "zip:" prefix on the destination name packs the selection into a new
-        # archive instead of a plain copy (mirrors the zip VFS scheme).
         if ctx.dest_loc.scheme != "file":
             # Copy/move INTO a browsed archive at its current sub-path; the
             # typed value is ignored (append-only, no path editing). Checked
-            # before the "zip:" pack prefix since the prefill is a zip:// URI.
+            # before the provider-prefix path since the prefill is a "<scheme>://"
+            # URI which would otherwise match the prefix dispatch.
             self._run_copy_into_archive(ctx)
             return
-        if raw.startswith("zip:"):
-            # Pack overload applies only to a local destination dir.
-            self._pack_from_copy_dest(ctx, raw[len("zip:"):].strip())
+        # Provider prefix: "<scheme>:<spec>" (e.g. zip:backup.zip, ftp:host/path)
+        # hands <spec> to that provider, which creates the target archive/
+        # connection; we copy the selection in and open it in the dest panel.
+        target = self._resolve_prefixed_target(raw, base=ctx.dest_loc)
+        if target is not None:
+            dest_panel = self._opposite_panel(self._active_panel())
+            self._run_copy_into_target(ctx, target, open_in=dest_panel)
             return
         user_dest = Path(raw).expanduser() if raw else ctx.dest
         self._run_copy_move(ctx, user_dest)
 
+    def _resolve_prefixed_target(self, raw: str, *, base: VfsPath) -> VfsPath | None:
+        """Map a typed ``<scheme>:<spec>`` destination to a write-target locator
+        via the matching provider's ``resolve_target`` (its declared prefix).
+
+        Returns None when there is no ``<scheme>:`` prefix for a registered
+        provider that implements the optional resolver — the caller then treats
+        the value as an ordinary local path.
+        """
+        scheme, sep, spec = raw.partition(":")
+        if not sep or scheme not in self._vfs_registry.schemes():
+            return None
+        provider = self._vfs_registry.for_scheme(scheme)
+        resolver = getattr(provider, "resolve_target", None)
+        if resolver is None:
+            return None
+        try:
+            return resolver(spec.strip(), base=base)
+        except Exception:
+            return None
+
     def _run_copy_into_archive(self, ctx: CopyMoveRequest) -> None:
         """Copy/move the selection into the browsed archive (ctx.dest_loc)."""
+        self._run_copy_into_target(ctx, ctx.dest_loc)
+
+    def _run_copy_into_target(
+        self, ctx: CopyMoveRequest, target: VfsPath, *, open_in=None
+    ) -> None:
+        """Copy/move the selection into ``target`` via the transfer engine.
+
+        ``open_in`` (a FilePanel) is navigated into ``target`` once the op
+        succeeds — so creating ``zip:foo`` lands you inside the new archive.
+        """
         if self.desktop is None:
             return
         op_label = "Copying" if ctx.op == "copy" else "Moving"
@@ -582,33 +623,21 @@ class DundersApp(App):
             result = transfer(
                 self._vfs_registry,
                 ctx.targets,
-                ctx.dest_loc,
+                target,
                 mode=ctx.op,
                 on_progress=_on_progress,
                 cancel_event=progress.cancel_event,
             )
-            self.call_from_thread(self._finish_op, ctx.op, progress, result)
+            self.call_from_thread(
+                self._finish_into_target, ctx.op, progress, result, target, open_in
+            )
 
         self.run_worker(_worker, thread=True, exclusive=False, group="fileop")
 
-    def _pack_from_copy_dest(self, ctx: CopyMoveRequest, name: str) -> None:
-        """F5 with a 'zip:'-prefixed destination → pack the selection."""
-        if not name:
-            return
-        if not name.lower().endswith(".zip"):
-            name += ".zip"
-        target = Path(name).expanduser()
-        if not target.is_absolute():
-            target = ctx.dest / target
-        # Only local sources can be packed (extraction-from-archive is separate).
-        local: list[Path] = []
-        for loc in ctx.targets:
-            if loc.scheme == "file":
-                local.append(loc.to_local())
-        if not local:
-            self._warn_archive_unsupported()
-            return
-        self._run_pack(local, target, ctx.base)
+    def _finish_into_target(self, op, progress, result, target, open_in) -> None:
+        self._finish_op(op, progress, result)
+        if open_in is not None and not result.errors and not result.cancelled:
+            open_in._change_cwd_loc(target)
 
     def on_copy_move_dialog_cancelled(
         self, event: CopyMoveDialog.Cancelled
@@ -908,7 +937,27 @@ class DundersApp(App):
                 label=f"Theme: {_theme_label(name)}",
                 handler=(lambda n=name: self._apply_theme(n, persist=True)),
             ))
+        # Dunders menu ("_"): one open-command per registered provider that
+        # declares a display name and a resolve_target (archive/connection it
+        # can open or create in the active panel).
+        for scheme, label in self._openable_dunders():
+            cmds.append(WindowCommand(
+                id=f"dunder.open.{scheme}",
+                label=label,
+                handler=(lambda s=scheme: self._open_dunder(s)),
+            ))
         self.command_registry.register_many(cmds)
+
+    def _openable_dunders(self) -> list[tuple[str, str]]:
+        """(scheme, display_name) for providers that can be opened from "_",
+        i.e. those declaring both a display name and a resolve_target."""
+        out: list[tuple[str, str]] = []
+        for scheme in sorted(self._vfs_registry.schemes()):
+            provider = self._vfs_registry.for_scheme(scheme)
+            label = getattr(provider, "display_name", None)
+            if label and hasattr(provider, "resolve_target"):
+                out.append((scheme, label))
+        return out
 
     def action_open_palette(self) -> None:
         if self.dispatcher is None or self.desktop is None:
@@ -1101,6 +1150,11 @@ class DundersApp(App):
         """
         assert self.menu_bar is not None
         self._all_menus = [
+            # The brand menu: every openable dunder (provider) — fill in the blank.
+            Menu("_", [
+                MenuItem(label=label, command_id=f"dunder.open.{scheme}")
+                for scheme, label in self._openable_dunders()
+            ]),
             Menu("Left", [
                 MenuItem(label="Toggle visibility", command_id="panel.left.toggle"),
                 MenuSeparator(),
@@ -1896,6 +1950,43 @@ class DundersApp(App):
         show_modal(self.desktop, dialog, title="Create archive", size=(60, 7))
         self.call_after_refresh(dialog.focus_input)
 
+    def _open_dunder(self, scheme: str) -> None:
+        """"_" menu: prompt for a spec, then open that provider in the active
+        panel (create/open an archive, initialise a connection, …)."""
+        if self._has_active_modal():
+            return
+        panel = self._active_panel()
+        if panel is None or self.desktop is None:
+            return
+        provider = self._vfs_registry.for_scheme(scheme)
+        label = getattr(provider, "display_name", scheme)
+        self._remember_active_panel_id()
+        dialog = NewFileDialog(
+            prompt=f"Open {label} — name or address:",
+            context=OpenDunderRequest(scheme=scheme),
+            submit_label="Open",
+            title=label,
+        )
+        show_modal(self.desktop, dialog, title=label, size=(60, 7))
+        self.call_after_refresh(dialog.focus_input)
+
+    def _do_open_dunder(self, scheme: str, spec: str) -> None:
+        panel = self._active_panel()
+        if panel is None:
+            return
+        provider = self._vfs_registry.for_scheme(scheme)
+        resolver = getattr(provider, "resolve_target", None)
+        if resolver is None:
+            return
+        try:
+            target = resolver(spec.strip(), base=panel.cwd_loc)
+        except Exception:
+            target = None
+        if target is None:
+            self.notify(f"Cannot open {spec!r}", severity="warning")
+            return
+        panel._change_cwd_loc(target)
+
     def action_new(self) -> None:
         if self._has_active_modal():
             return
@@ -2125,6 +2216,11 @@ class DundersApp(App):
                 name += ".zip"
             self._run_pack(ctx.targets, ctx.base / name, ctx.base)
             return
+        if isinstance(ctx, OpenDunderRequest):
+            spec = event.value.strip()
+            if spec:
+                self._do_open_dunder(ctx.scheme, spec)
+            return
         if isinstance(ctx, NewFileRequest):
             name = event.value.strip()
             if not name:
@@ -2252,7 +2348,7 @@ class DundersApp(App):
         if entry.is_dir:
             return  # F4 on a dir is a no-op
         if not self._is_local_entry(entry):
-            self._warn_archive_unsupported()
+            self._open_member_edit(entry)  # edit in place via the provider
             return
         self._open_editor_window(entry.path, read_only=False)
 
@@ -2526,42 +2622,75 @@ class DundersApp(App):
             self._pre_menu_window = win
             self._pre_menu_focus = None
 
-    def _open_member_view(self, entry) -> None:
-        """F3/Enter on a file inside a non-local source (e.g. a browsed zip):
-        read it through its VFS provider and open a read-only text viewer.
-
-        Binary and oversized members are declined with a notification — the
-        hex viewer is mmap/path-based and can't yet back a virtual member.
-        """
-        if self.desktop is None:
-            return
+    def _read_member_text(self, entry) -> str | None:
+        """Read an archive member through its VFS provider, returning decoded
+        text — or None (with a notification) if too large, unreadable, or binary."""
         if entry.size > self._HEX_VIEW_SIZE_THRESHOLD:
             self.notify(
-                f"{entry.name}: too large to view inside an archive yet",
+                f"{entry.name}: too large to open inside an archive yet",
                 severity="warning",
             )
-            return
+            return None
         provider = self._vfs_registry.resolve(entry.loc)
         try:
             with provider.open_read(entry.loc) as fh:
                 data = fh.read()
         except OSError as exc:
             self.notify(f"Cannot read {entry.name}: {exc}", severity="warning")
-            return
+            return None
         if b"\x00" in data[:8192]:
             self.notify(
-                f"{entry.name}: binary file (not viewable in archives yet)",
+                f"{entry.name}: binary file (not editable in archives yet)",
                 severity="warning",
             )
+            return None
+        return data.decode("utf-8", errors="replace")
+
+    def _open_member_view(self, entry) -> None:
+        """F3/Enter on a file inside an archive: read-only text viewer."""
+        if self.desktop is None:
+            return
+        text = self._read_member_text(entry)
+        if text is None:
             return
         self._remember_active_panel_id()
         self._editor_seq += 1
-        content = ViewerContent(
-            initial_text=data.decode("utf-8", errors="replace"),
-            file_path=entry.name,
-        )
+        content = ViewerContent(initial_text=text, file_path=entry.name)
         self._mount_maximized_content(
             content, title=f"View: {entry.name}", win_id=f"viewer-{self._editor_seq}"
+        )
+
+    def _open_member_edit(self, entry) -> None:
+        """F4 on a file inside a writable archive: editable editor whose save
+        writes the member back through the provider (overwrite in place)."""
+        if self.desktop is None:
+            return
+        provider = self._vfs_registry.resolve(entry.loc)
+        if "write" not in getattr(provider, "capabilities", frozenset()):
+            self._warn_archive_unsupported()
+            return
+        text = self._read_member_text(entry)
+        if text is None:
+            return
+        loc = entry.loc
+
+        def _save(buf_text: str) -> bool:
+            p = self._vfs_registry.resolve(loc)
+            try:
+                with p.open_write(loc, overwrite=True) as w:
+                    w.write(buf_text.encode("utf-8"))
+            except OSError as exc:
+                self.notify(f"Cannot save {loc.name}: {exc}", severity="warning")
+                return False
+            return True
+
+        self._remember_active_panel_id()
+        self._editor_seq += 1
+        content = _FocusableEditorContent(
+            initial_text=text, file_path=entry.name, save_handler=_save
+        )
+        self._mount_maximized_content(
+            content, title=f"Edit: {entry.name}", win_id=f"editor-{self._editor_seq}"
         )
 
     def _open_editor_window(self, path: Path, *, read_only: bool = False) -> None:

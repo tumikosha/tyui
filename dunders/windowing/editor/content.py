@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from textual.app import ComposeResult
@@ -54,10 +55,15 @@ class EditorContent(WindowContent):
         title: str | None = None,
         enable_folding: bool = True,
         enable_macros: bool = True,
+        save_handler: "Callable[[str], bool] | None" = None,
     ) -> None:
         super().__init__()
         self._initial_text = initial_text
         self._file_path = file_path
+        # When set, Ctrl+S routes the buffer text here instead of writing to a
+        # local file — used to save a file edited inside an archive back through
+        # its VFS provider. Returns True on success.
+        self._save_handler = save_handler
         self._macro_storage_path = macro_storage_path
         self._enable_folding = enable_folding
         self._enable_macros = enable_macros
@@ -317,6 +323,22 @@ class EditorContent(WindowContent):
         return commands
 
     def _save(self) -> None:
+        if self._save_handler is not None:
+            text = "\n".join(self._editor.buffer.lines)
+            try:
+                ok = bool(self._save_handler(text))
+            except Exception:
+                ok = False
+            if ok:
+                self._editor.buffer.modified = False
+                self.is_dirty = False
+                self._notify_saved(self._file_path or "archive member")
+            else:
+                try:
+                    self.app.notify("Save failed", severity="warning")
+                except Exception:
+                    pass
+            return
         path = self._editor.buffer.file_path
         if path:
             self._editor.buffer.save()

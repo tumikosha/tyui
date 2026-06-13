@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from dunders.fm.file_entry import FileEntry
 
 
-__all__ = ["VfsProvider", "ProgressCallback"]
+__all__ = ["VfsProvider", "ProgressCallback", "TargetResolver"]
 
 ProgressCallback = Callable[[int, int], None]
 
@@ -55,7 +55,13 @@ class VfsProvider(Protocol):
 
     def open_read(self, loc: VfsPath) -> BinaryIO: ...
 
-    def open_write(self, loc: VfsPath, *, size_hint: int | None = None) -> BinaryIO: ...
+    def open_write(
+        self, loc: VfsPath, *, size_hint: int | None = None, overwrite: bool = False
+    ) -> BinaryIO:
+        """Open a member/file for writing. ``overwrite=True`` replaces an
+        existing target (used when editing a member in place); the default
+        refuses an existing member so copies never clobber silently."""
+        ...
 
     def mkdir(self, parent: VfsPath, name: str) -> OpResult: ...
 
@@ -89,3 +95,30 @@ class VfsProvider(Protocol):
         on_progress: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
     ) -> OpResult | None: ...
+
+
+@runtime_checkable
+class TargetResolver(Protocol):
+    """Optional capability: turn a typed ``<scheme>:<spec>`` destination into a
+    write-target locator, creating the archive/connection if needed.
+
+    A provider *declares its prefix* simply as its ``scheme`` and opts into
+    "create on copy" by implementing this. When an F5 copy destination starts
+    with ``<scheme>:``, the app hands the part after the colon to the matching
+    provider's ``resolve_target`` and copies the selection into the returned
+    locator (then opens it in the panel). Examples:
+
+    - ``zip:backup.zip`` → a new ``zip`` archive at ``<base>/backup.zip``.
+    - ``ftp:user@host/path`` → an opened ``ftp`` connection rooted there.
+
+    Kept separate from :class:`VfsProvider` (not all providers create targets),
+    so it is checked structurally via ``getattr``/``isinstance``.
+    """
+
+    scheme: str
+
+    def resolve_target(self, spec: str, *, base: VfsPath) -> VfsPath | None:
+        """``spec`` is the text after ``<scheme>:``. ``base`` is the destination
+        panel's location (where a relative target is created). Return the target
+        locator, or ``None`` if this provider can't take ``spec`` here."""
+        ...

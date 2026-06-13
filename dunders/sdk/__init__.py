@@ -28,7 +28,7 @@ from dunders.core.plugins.api import PluginApi
 from dunders.core.plugins.events import EventBus
 from dunders.core.plugins.plugin import DunderPlugin
 from dunders.core.vfs import VfsPath, VfsRegistry
-from dunders.core.vfs.provider import VfsProvider
+from dunders.core.vfs.provider import TargetResolver, VfsProvider
 from dunders.fm.actions import OpError, OpResult
 from dunders.fm.file_entry import FileEntry
 from dunders.windowing.content import WindowCommand, WindowContent
@@ -43,6 +43,7 @@ __all__ = [
     "VfsPath",
     "VfsProvider",
     "VfsRegistry",
+    "TargetResolver",
     "FileEntry",
     "OpResult",
     "OpError",

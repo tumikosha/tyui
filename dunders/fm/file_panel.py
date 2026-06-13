@@ -162,14 +162,21 @@ class FilePanel(WindowContent):
             return str(self.cwd_loc.to_local())
         return self.cwd_loc.as_uri()
 
-    def _is_archive_entry(self, entry: FileEntry) -> bool:
-        """A local ``.zip`` we can enter as a panel, given a zip provider."""
-        return (
-            entry.loc.scheme == "file"
-            and not entry.is_dir
-            and entry.loc.name.lower().endswith(".zip")
-            and "zip" in self._registry.schemes()
-        )
+    # Filename suffix -> the VFS scheme that browses it as a directory tree.
+    _ARCHIVE_SUFFIXES = {".zip": "zip", ".7z": "7z"}
+
+    def _archive_scheme_for(self, entry: FileEntry) -> str | None:
+        """The archive scheme to enter for a local file, or None.
+
+        Returns a scheme only when the file's suffix is a known archive type
+        AND a provider for it is registered (e.g. 7z needs the CLI present)."""
+        if entry.loc.scheme != "file" or entry.is_dir:
+            return None
+        name = entry.loc.name.lower()
+        for suffix, scheme in self._ARCHIVE_SUFFIXES.items():
+            if name.endswith(suffix) and scheme in self._registry.schemes():
+                return scheme
+        return None
 
     # ------------------------------------------------------------------
     # Listing
@@ -236,10 +243,11 @@ class FilePanel(WindowContent):
         if entry.is_dir:
             self._change_cwd_loc(entry.loc)
             return
-        if self._is_archive_entry(entry):
-            # Enter a .zip as if it were a directory: switch to a zip locator
-            # at the archive root; the registry routes scans to ZipProvider.
-            archive = VfsPath(scheme="zip", root=str(entry.loc.to_local()), parts=())
+        scheme = self._archive_scheme_for(entry)
+        if scheme is not None:
+            # Enter the archive as if it were a directory: switch to an archive
+            # locator at its root; the registry routes scans to the provider.
+            archive = VfsPath(scheme=scheme, root=str(entry.loc.to_local()), parts=())
             self._change_cwd_loc(archive)
             return
         self.post_message(FilePanel.ItemActivated(self, entry))

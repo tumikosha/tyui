@@ -51,7 +51,10 @@ class LocalProvider:
     def open_read(self, loc: VfsPath) -> BinaryIO:
         return open(loc.to_local(), "rb")
 
-    def open_write(self, loc: VfsPath, *, size_hint: int | None = None) -> BinaryIO:
+    def open_write(
+        self, loc: VfsPath, *, size_hint: int | None = None, overwrite: bool = False
+    ) -> BinaryIO:
+        # Local files always truncate on "wb"; overwrite is implicit.
         return open(loc.to_local(), "wb")
 
     def mkdir(self, parent: VfsPath, name: str) -> actions.OpResult:
@@ -111,9 +114,14 @@ def default_registry() -> VfsRegistry:
     Returns a new instance per call — providers are stateless (bar per-archive
     caches), so panels do not need to share one, and tests stay isolated.
     """
+    from dunders.fm.providers.sevenzip_provider import SevenZipProvider, find_7z
     from dunders.fm.providers.zip_provider import ZipProvider
 
     reg = VfsRegistry()
     reg.register(LocalProvider())
     reg.register(ZipProvider())
+    # 7z is browsed via the external CLI; only offer the scheme when a binary
+    # is present, so the panel never tries to enter a .7z it cannot open.
+    if find_7z() is not None:
+        reg.register(SevenZipProvider())
     return reg
