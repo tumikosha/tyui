@@ -161,6 +161,7 @@ class CopyMoveRequest:
     targets: list[VfsPath]  # scheme-agnostic so archive members can be extracted
     dest: Path
     base: Path  # source panel cwd — arcname root when the dest is a "zip:" target
+    dest_loc: VfsPath  # opposite panel location; non-file -> write INTO an archive
 
 
 @dataclass(frozen=True)
@@ -542,11 +543,43 @@ class DundersApp(App):
         raw = (event.value or "").strip()
         # "zip:" prefix on the destination name packs the selection into a new
         # archive instead of a plain copy (mirrors the zip VFS scheme).
+        if ctx.dest_loc.scheme != "file":
+            # Copy/move INTO a browsed archive at its current sub-path; the
+            # typed value is ignored (append-only, no path editing). Checked
+            # before the "zip:" pack prefix since the prefill is a zip:// URI.
+            self._run_copy_into_archive(ctx)
+            return
         if raw.startswith("zip:"):
+            # Pack overload applies only to a local destination dir.
             self._pack_from_copy_dest(ctx, raw[len("zip:"):].strip())
             return
         user_dest = Path(raw).expanduser() if raw else ctx.dest
         self._run_copy_move(ctx, user_dest)
+
+    def _run_copy_into_archive(self, ctx: CopyMoveRequest) -> None:
+        """Copy/move the selection into the browsed archive (ctx.dest_loc)."""
+        if self.desktop is None:
+            return
+        op_label = "Copying" if ctx.op == "copy" else "Moving"
+        progress = ProgressDialog(title=op_label, total=len(ctx.targets))
+        show_modal(self.desktop, progress, title=op_label, size=(60, 7))
+        self.call_after_refresh(progress.focus)
+
+        def _worker() -> None:
+            def _on_progress(i: int, n: int) -> None:
+                self.call_from_thread(progress.set_progress, i, n)
+
+            result = transfer(
+                self._vfs_registry,
+                ctx.targets,
+                ctx.dest_loc,
+                mode=ctx.op,
+                on_progress=_on_progress,
+                cancel_event=progress.cancel_event,
+            )
+            self.call_from_thread(self._finish_op, ctx.op, progress, result)
+
+        self.run_worker(_worker, thread=True, exclusive=False, group="fileop")
 
     def _pack_from_copy_dest(self, ctx: CopyMoveRequest, name: str) -> None:
         """F5 with a 'zip:'-prefixed destination → pack the selection."""
@@ -2161,13 +2194,21 @@ class DundersApp(App):
         opposite = self._opposite_panel(panel)
         if opposite is None:
             return
-        if opposite.cwd_loc.scheme != "file":
-            self._warn_archive_unsupported()  # can't write into an archive
+        dest_loc = opposite.cwd_loc
+        into_archive = dest_loc.scheme != "file"
+        if into_archive and "write" not in self._vfs_registry.resolve(dest_loc).capabilities:
+            self._warn_archive_unsupported()  # destination provider is read-only
             return
         self._remember_active_panel_id()
         dest = opposite.cwd
         verb = "Copy" if op == "copy" else "Move"
-        if len(targets) == 1:
+        if into_archive:
+            # Destination is a browsed archive dir; the path isn't user-editable
+            # (append at the current sub-path). Show the locator for clarity.
+            initial = dest_loc.as_uri()
+            n = len(targets)
+            prompt = f"{verb} {n} item(s) into archive:"
+        elif len(targets) == 1:
             initial = str(dest / targets[0].name)
             prompt = f"{verb} '{targets[0].name}' to:"
         else:
@@ -2178,7 +2219,9 @@ class DundersApp(App):
             initial=initial,
             ok_label=verb,
             title=verb,
-            context=CopyMoveRequest(op=op, targets=targets, dest=dest, base=panel.cwd),
+            context=CopyMoveRequest(
+                op=op, targets=targets, dest=dest, base=panel.cwd, dest_loc=dest_loc
+            ),
         )
         show_modal(self.desktop, dialog, title=verb, size=(72, 9))
         self.call_after_refresh(dialog.focus_input)

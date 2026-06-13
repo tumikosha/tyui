@@ -93,11 +93,34 @@ def _build_index(zf: zipfile.ZipFile) -> _Index:
     return {parent: list(nodes.values()) for parent, nodes in grouped.items()}
 
 
+class _ZipMemberWriter(io.BytesIO):
+    """A write buffer that appends its contents to a zip member on close.
+
+    The generic transfer engine does ``with open_write(dest) as w: copy into w``;
+    this buffers the bytes and flushes them via ``writestr`` exactly once when
+    the ``with`` block exits.
+    """
+
+    def __init__(self, archive: str, inner: str) -> None:
+        super().__init__()
+        self._archive = archive
+        self._inner = inner
+        self._flushed = False
+
+    def close(self) -> None:
+        if not self._flushed and not self.closed:
+            self._flushed = True
+            data = self.getvalue()
+            with zipfile.ZipFile(self._archive, "a") as zf:
+                zf.writestr(self._inner, data)
+        super().close()
+
+
 class ZipProvider:
-    """Read-only ``VfsProvider`` for zip archives (structural conformance)."""
+    """Read/append ``VfsProvider`` for zip archives (structural conformance)."""
 
     scheme = "zip"
-    capabilities = frozenset({"read", "stream"})
+    capabilities = frozenset({"read", "stream", "write"})
 
     def __init__(self) -> None:
         # archive path -> ((mtime, size), index)
@@ -166,13 +189,44 @@ class ZipProvider:
             data = zf.read(inner)
         return io.BytesIO(data)
 
-    # -- read-only: mutations are unsupported -----------------------------
+    # -- write (append-only) ----------------------------------------------
 
     def open_write(self, loc: VfsPath, *, size_hint: int | None = None) -> BinaryIO:
-        raise OSError("zip archives are read-only")
+        """Return a writer that appends ``loc`` to the archive on close.
+
+        Append-only: a member whose name already exists is refused (we never
+        rewrite the archive to overwrite). The bytes are buffered in memory and
+        flushed via ``writestr`` when the writer closes — fine for the file
+        sizes a panel copy deals with.
+        """
+        inner = "/".join(loc.parts)
+        if not inner:
+            raise OSError("cannot write the archive root as a member")
+        with zipfile.ZipFile(loc.root, "a") as zf:
+            if inner in zf.namelist():
+                raise FileExistsError(f"{inner} already exists in archive")
+        return _ZipMemberWriter(loc.root, inner)
 
     def mkdir(self, parent: VfsPath, name: str) -> OpResult:
-        raise OSError("zip archives are read-only")
+        """Add an explicit ``dir/`` entry, preserving empty directories.
+
+        Tolerates a pre-existing directory (no error) so the transfer engine
+        can create the same parent twice without failing.
+        """
+        result = OpResult()
+        inner = "/".join((*parent.parts, name))
+        if not inner:
+            return result
+        dirent = inner + "/"
+        with zipfile.ZipFile(parent.root, "a") as zf:
+            existing = set(zf.namelist())
+            if dirent not in existing and not any(
+                n.startswith(dirent) for n in existing
+            ):
+                zf.writestr(dirent, b"")
+        # No explicit cache flush needed: _index_for keys on (mtime, size),
+        # and appending a member changes the archive's size on disk.
+        return result
 
     def delete(
         self,
@@ -181,7 +235,8 @@ class ZipProvider:
         on_progress: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
     ) -> OpResult:
-        raise OSError("zip archives are read-only")
+        # Deleting a member requires rewriting the whole archive — out of scope.
+        raise OSError("deleting from a zip archive is not supported")
 
     def copy_within(
         self,

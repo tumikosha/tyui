@@ -91,12 +91,14 @@ async def test_f5_extracts_directory_recursively(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_f5_into_archive_is_blocked(tmp_path):
-    # Left = local file; right browses a zip. Copy INTO an archive is refused.
+async def test_f5_copies_into_writable_archive(tmp_path):
+    # Left = local file; right browses a zip. F5 copies INTO the archive.
+    import zipfile as _zip
+
     src = tmp_path / "src"
     src.mkdir()
     (src / "thing.txt").write_text("hi")
-    _make_archive(src)  # also gives left an a.zip, irrelevant here
+    _make_archive(src)  # gives the right panel an a.zip to browse into
 
     app = DundersApp(launch_mode="fm", initial_path=str(src))
     async with app.run_test() as pilot:
@@ -108,9 +110,16 @@ async def test_f5_into_archive_is_blocked(tmp_path):
         right.activate()
         await pilot.pause()
         assert right.cwd_loc.scheme == "zip"
+        archive = right.cwd_loc.root
         # Active (left) panel has a real file under the cursor.
         _cursor_on(left, "thing.txt")
         await pilot.press("f5")
         await pilot.pause()
-        # Refused: no copy dialog opened (can't write into a zip).
-        assert not list(app.query(CopyMoveDialog))
+        # The dialog opens now (archive is writable); submit to copy in.
+        dialog = app.query_one(CopyMoveDialog)
+        dialog.action_submit()
+        for _ in range(20):
+            await pilot.pause()
+        with _zip.ZipFile(archive) as zf:
+            assert "thing.txt" in zf.namelist()
+            assert zf.read("thing.txt") == b"hi"

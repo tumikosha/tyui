@@ -90,14 +90,18 @@ class TestRead:
             assert fh.read() == b"world"
 
 
-class TestReadOnly:
-    def test_open_write_raises(self, archive):
+class TestWriteContract:
+    """Append-write is supported; overwrite and delete are not (see
+    test_zip_write.py for the full write coverage)."""
+
+    def test_open_write_root_is_rejected(self, archive):
+        # The archive root is not a member; only named members are writable.
         with pytest.raises(OSError):
             ZipProvider().open_write(_root(archive))
 
-    def test_mkdir_raises(self, archive):
+    def test_delete_unsupported(self, archive):
         with pytest.raises(OSError):
-            ZipProvider().mkdir(_root(archive), "x")
+            ZipProvider().delete([_root(archive).child("top.txt")])
 
     def test_copy_within_returns_none(self, archive):
         # No intra-zip fast path: extraction is a cross-provider transfer.
