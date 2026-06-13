@@ -171,11 +171,23 @@ class TestWrite:
         with pytest.raises(OSError):
             SevenZipProvider().open_write(loc)
 
-    def test_delete_still_unsupported(self, tmp_path):
+    def test_delete_removes_member(self, tmp_path):
+        archive = _make_7z(tmp_path)  # a.txt + dir/sub/deep.txt
+        p = SevenZipProvider()
+        res = p.delete([VfsPath(scheme="7z", root=str(archive), parts=("a.txt",))])
+        assert not res.errors
+        names = {e.name for e in p.scan(_root(archive), include_parent=False)}
+        assert "a.txt" not in names
+        assert "dir" in names  # subtree intact
+
+    def test_delete_directory_removes_subtree(self, tmp_path):
         archive = _make_7z(tmp_path)
-        loc = VfsPath(scheme="7z", root=str(archive), parts=("a.txt",))
-        with pytest.raises(OSError):
-            SevenZipProvider().delete([loc])
+        p = SevenZipProvider()
+        res = p.delete([VfsPath(scheme="7z", root=str(archive), parts=("dir",))])
+        assert not res.errors
+        names = {e.name for e in p.scan(_root(archive), include_parent=False)}
+        assert "dir" not in names
+        assert "a.txt" in names
 
     def test_resolve_target_creates_empty_archive(self, tmp_path):
         loc = SevenZipProvider().resolve_target("brand-new.7z", base=VfsPath.local(tmp_path))
@@ -221,3 +233,4 @@ class TestPanelEntersSevenZip:
         panel.activate()
         panel.ascend()
         assert panel.cwd_loc == VfsPath.local(tmp_path)
+        assert panel.entries[panel.cursor].name == "test.7z"  # cursor on archive

@@ -279,11 +279,17 @@ class FilePanel(WindowContent):
         # showing the child we left) — put the cursor on it. Covers both
         # Backspace (ascend) and Enter on the ".." row, which both go
         # through this method. Descending leaves cursor at row 0 (which
-        # the entry-search below silently leaves alone since `old` won't
+        # the entry-search below silently leaves alone since `return_loc` won't
         # appear under a fresh child listing).
         if old != new_loc:
+            return_loc = old
+            if old.scheme != "file" and old.is_source_root:
+                # Exited an archive: land on the archive file itself, whose
+                # local path is the source root (old.loc never appears as an
+                # entry in the parent's local listing).
+                return_loc = VfsPath.local(Path(old.root))
             for i, e in enumerate(self.entries):
-                if e.loc == old:
+                if e.loc == return_loc:
                     self.cursor = i
                     self._ensure_cursor_visible()
                     break

@@ -102,6 +102,27 @@ async def test_f4_edits_zip_member_and_saves_back(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_f8_deletes_zip_member(tmp_path):
+    from dunders.fm.dialogs import ConfirmDialog
+
+    _make_zip(tmp_path / "a.zip")  # a.txt + dir/b.txt
+    app = DundersApp(launch_mode="fm", initial_path=str(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        _enter_zip_member(app, "a.zip", "a.txt")
+        app.action_delete()
+        await pilot.pause()
+        app.query_one(ConfirmDialog).action_confirm()
+        for _ in range(20):
+            await pilot.pause()
+        with zipfile.ZipFile(tmp_path / "a.zip") as zf:
+            names = set(zf.namelist())
+        assert "a.txt" not in names
+        assert "dir/b.txt" in names  # untouched
+
+
+@pytest.mark.asyncio
 async def test_f4_read_only_provider_member_warns(tmp_path, monkeypatch):
     # A provider without "write" capability -> F4 declines (no editor).
     _make_zip(tmp_path / "a.zip")

@@ -99,9 +99,20 @@ class TestWriteContract:
         with pytest.raises(OSError):
             ZipProvider().open_write(_root(archive))
 
-    def test_delete_unsupported(self, archive):
-        with pytest.raises(OSError):
-            ZipProvider().delete([_root(archive).child("top.txt")])
+    def test_delete_removes_member(self, archive):
+        # archive has top.txt + dir/inner.txt
+        res = ZipProvider().delete([_root(archive).child("top.txt")])
+        assert not res.errors
+        with zipfile.ZipFile(archive) as zf:
+            names = set(zf.namelist())
+        assert "top.txt" not in names
+        assert "dir/inner.txt" in names  # others intact
+
+    def test_delete_directory_removes_subtree(self, archive):
+        res = ZipProvider().delete([_root(archive).child("dir")])
+        assert not res.errors
+        with zipfile.ZipFile(archive) as zf:
+            assert not any(n.startswith("dir/") for n in zf.namelist())
 
     def test_copy_within_returns_none(self, archive):
         # No intra-zip fast path: extraction is a cross-provider transfer.

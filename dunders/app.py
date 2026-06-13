@@ -30,7 +30,6 @@ from dunders.core.vfs import VfsPath
 from dunders.fm.actions import (
     OpResult,
     chmod_paths,
-    delete_paths,
     mkdir_at,
     pack_paths,
 )
@@ -167,7 +166,7 @@ class CopyMoveRequest:
 
 @dataclass(frozen=True)
 class DeleteRequest:
-    targets: list[Path]
+    targets: list[VfsPath]  # scheme-agnostic: local files or archive members
 
 
 @dataclass(frozen=True)
@@ -682,15 +681,23 @@ class DundersApp(App):
         show_modal(self.desktop, progress, title="Delete", size=(60, 7))
         self.call_after_refresh(progress.focus)
 
+        targets = req.targets
+        provider = self._vfs_registry.resolve(targets[0]) if targets else None
+
         def _worker() -> None:
             def _on_progress(i: int, n: int) -> None:
                 self.call_from_thread(progress.set_progress, i, n)
 
-            result = delete_paths(
-                req.targets,
-                on_progress=_on_progress,
-                cancel_event=progress.cancel_event,
-            )
+            if provider is None:
+                result = OpResult()
+            else:
+                # LocalProvider.delete wraps delete_paths; archive providers
+                # repack / `7z d`. Same contract, so one path serves both.
+                result = provider.delete(
+                    targets,
+                    on_progress=_on_progress,
+                    cancel_event=progress.cancel_event,
+                )
             self.call_from_thread(self._finish_op, "delete", progress, result)
 
         self.run_worker(_worker, thread=True, exclusive=False, group="fileop")
@@ -3032,10 +3039,13 @@ class DundersApp(App):
         panel = self._active_panel()
         if panel is None or self.desktop is None:
             return
+        # Delete works on local files and on members inside a writable archive.
         if panel.cwd_loc.scheme != "file":
-            self._warn_archive_unsupported()
-            return
-        targets = panel.effective_targets()
+            provider = self._vfs_registry.resolve(panel.cwd_loc)
+            if "write" not in getattr(provider, "capabilities", frozenset()):
+                self._warn_archive_unsupported()
+                return
+        targets = panel.effective_target_locs()
         if not targets:
             return
         self._remember_active_panel_id()

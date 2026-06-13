@@ -30,7 +30,7 @@ from typing import BinaryIO
 
 from dunders.core.vfs import VfsPath
 from dunders.core.vfs.provider import ProgressCallback
-from dunders.fm.actions import OpResult
+from dunders.fm.actions import OpError, OpResult
 from dunders.fm.file_entry import FileEntry
 
 
@@ -317,7 +317,24 @@ class SevenZipProvider:
         on_progress: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
     ) -> OpResult:
-        raise OSError("deleting from 7z archives is not supported")
+        """Remove members via ``7z d`` (recursive for directory members)."""
+        result = OpResult()
+        inners = ["/".join(t.parts) for t in targets if t.parts]
+        if not inners:
+            return result
+        proc = subprocess.run(
+            [self._require_bin(), "d", targets[0].root, *inners],
+            capture_output=True,
+        )
+        if proc.returncode != 0:
+            result.errors.append(OpError(
+                loc=targets[0],
+                reason=proc.stderr.decode(errors="replace").strip() or "7z delete failed",
+            ))
+            return result
+        if on_progress is not None:
+            on_progress(len(inners), len(inners))
+        return result
 
     def copy_within(self, sources, dest, *, rename_to=None, on_progress=None,
                     cancel_event=None) -> OpResult | None:

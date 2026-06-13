@@ -64,6 +64,8 @@ def test_ascend_at_zip_root_exits_to_local_dir(tmp_path: Path):
     p.ascend()
     assert p.cwd_loc == VfsPath.local(tmp_path)
     assert any(e.name == "a.zip" for e in p.entries)
+    # Cursor lands on the archive we came out of, not at the top.
+    assert p.entries[p.cursor].name == "a.zip"
 
 
 def test_parent_row_inside_zip_exits_via_activate(tmp_path: Path):
@@ -73,6 +75,7 @@ def test_parent_row_inside_zip_exits_via_activate(tmp_path: Path):
     _cursor_on(p, "..")
     p.activate()
     assert p.cwd_loc == VfsPath.local(tmp_path)
+    assert p.entries[p.cursor].name == "a.zip"  # cursor on the archive
 
 
 def test_selection_inside_zip_excluded_from_paths(tmp_path: Path):

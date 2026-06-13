@@ -122,13 +122,15 @@ class TestCrossProviderExtraction:
         )
         assert seen[-1] == (2, 2)  # dir/ has two files (inner.txt, sub/deep.txt)
 
-    def test_move_out_of_readonly_zip_copies_then_reports(self, tmp_path):
+    def test_move_out_of_zip_extracts_and_removes_member(self, tmp_path):
         archive = _make_zip(tmp_path / "a.zip")
         dest = tmp_path / "out"
         dest.mkdir()
         src = VfsPath(scheme="zip", root=str(archive), parts=("top.txt",))
         res = transfer(_reg(), [src], VfsPath.local(dest), mode="move")
-        # The copy lands; the source can't be removed from a read-only zip.
+        # zip is writable now, so move truly moves: extracted out AND removed.
+        assert not res.errors
         assert (dest / "top.txt").read_bytes() == b"hello"
-        assert len(res.errors) == 1
-        assert "not removed" in res.errors[0].reason
+        with zipfile.ZipFile(archive) as zf:
+            assert "top.txt" not in zf.namelist()
+            assert "dir/inner.txt" in zf.namelist()  # rest intact

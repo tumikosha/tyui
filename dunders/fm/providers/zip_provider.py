@@ -36,7 +36,7 @@ from typing import BinaryIO
 
 from dunders.core.vfs import VfsPath
 from dunders.core.vfs.provider import ProgressCallback
-from dunders.fm.actions import OpResult
+from dunders.fm.actions import OpError, OpResult
 from dunders.fm.file_entry import FileEntry
 
 
@@ -287,8 +287,38 @@ class ZipProvider:
         on_progress: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
     ) -> OpResult:
-        # Deleting a member requires rewriting the whole archive — out of scope.
-        raise OSError("deleting from a zip archive is not supported")
+        """Remove members by rewriting the archive without them.
+
+        A directory target drops its whole subtree (every member under
+        ``path/``). All targets must share one archive (a panel selection does).
+        """
+        result = OpResult()
+        inners = ["/".join(t.parts) for t in targets if t.parts]
+        if not inners:
+            return result
+        prefixes = tuple(i + "/" for i in inners)
+        drop = set(inners)
+        archive = targets[0].root
+        tmp = archive + ".tmp"
+        try:
+            with zipfile.ZipFile(archive, "r") as src, \
+                 zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
+                for item in src.infolist():
+                    name = item.filename.rstrip("/")
+                    if name in drop or item.filename.startswith(prefixes):
+                        continue
+                    dst.writestr(item, src.read(item.filename))
+            os.replace(tmp, archive)
+        except OSError as exc:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            result.errors.append(OpError(loc=targets[0], reason=str(exc)))
+            return result
+        if on_progress is not None:
+            on_progress(len(inners), len(inners))
+        return result
 
     def copy_within(
         self,

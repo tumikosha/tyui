@@ -53,11 +53,12 @@ class TestProviderWrite:
         ZipProvider().mkdir(_root(archive), "sub")
         assert "sub/" in _names(archive)
 
-    def test_delete_unsupported(self, tmp_path):
-        archive = _make_zip(tmp_path / "a.zip")
+    def test_delete_removes_member(self, tmp_path):
+        archive = _make_zip(tmp_path / "a.zip")  # existing.txt
         loc = VfsPath(scheme="zip", root=str(archive), parts=("existing.txt",))
-        with pytest.raises(OSError):
-            ZipProvider().delete([loc])
+        res = ZipProvider().delete([loc])
+        assert not res.errors
+        assert _names(archive) == set()
 
 
 class TestFileIntoZip:
