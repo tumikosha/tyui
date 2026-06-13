@@ -84,6 +84,65 @@ async def test_stale_slow_scan_is_discarded(tmp_path):
         assert not any(e.name == "remote.txt" for e in panel.entries)
 
 
+class _SlowConnectProvider:
+    """A 'slow' provider whose resolve_target (connect) blocks on a gate."""
+
+    scheme = "slowc"
+    display_name = "SlowC"
+    capabilities = frozenset({"read", "slow"})
+
+    def __init__(self, fail=False):
+        self.gate = threading.Event()
+        self.connects = 0
+        self.fail = fail
+
+    def resolve_target(self, spec, *, base, password=None):
+        self.connects += 1
+        self.gate.wait(timeout=5)
+        if self.fail:
+            raise OSError("connection refused by slowc")
+        return VfsPath(scheme="slowc", root="srv", parts=())
+
+    def scan(self, loc, *, show_hidden=False, include_parent=True):
+        return [FileEntry(loc=loc.child("ok.txt"), name="ok.txt",
+                          size=1, mtime=0.0, is_dir=False)]
+
+
+@pytest.mark.asyncio
+async def test_async_connect_off_thread_then_navigates(tmp_path):
+    app = DundersApp(launch_mode="fm", initial_path=str(tmp_path))
+    async with app.run_test() as pilot:
+        await _pump(pilot, 2)
+        panel = _active(app)
+        before = panel.cwd_loc
+        prov = _SlowConnectProvider()
+        app._vfs_registry.register(prov)
+        app._do_open_dunder("slowc", "srv")
+        await pilot.pause()
+        # Connect runs on a worker: the panel hasn't navigated yet, UI is free.
+        assert panel.cwd_loc == before
+        assert prov.connects == 1
+        prov.gate.set()  # let the connect finish → navigates → async scan
+        await _pump(pilot)
+        assert panel.cwd_loc.scheme == "slowc"
+        assert any(e.name == "ok.txt" for e in panel.entries)
+
+
+@pytest.mark.asyncio
+async def test_async_connect_failure_does_not_navigate(tmp_path):
+    app = DundersApp(launch_mode="fm", initial_path=str(tmp_path))
+    async with app.run_test() as pilot:
+        await _pump(pilot, 2)
+        panel = _active(app)
+        before = panel.cwd_loc
+        prov = _SlowConnectProvider(fail=True)
+        app._vfs_registry.register(prov)
+        app._do_open_dunder("slowc", "srv")
+        prov.gate.set()
+        await _pump(pilot)
+        assert panel.cwd_loc == before  # connect failed → stayed put
+
+
 def test_local_provider_stays_synchronous(tmp_path):
     """A fast provider must NOT go async — refresh_listing populates at once
     (no app needed), so existing sync callers keep working."""

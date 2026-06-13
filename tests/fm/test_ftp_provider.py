@@ -29,6 +29,15 @@ except ImportError:
 
 _needs_server = pytest.mark.skipif(not _HAS_PYFTPDLIB, reason="pyftpdlib not installed")
 
+
+async def _wait_open(pilot, panel, *, scheme="ftp", tries=40):
+    """Pump the event loop until the panel has connected (cwd_loc on `scheme`)
+    and finished its async listing."""
+    for _ in range(tries):
+        await pilot.pause()
+        if panel.cwd_loc.scheme == scheme and not panel._loading:
+            return
+
 # pyftpdlib's serve_forever thread errors in its kqueue poll when the test
 # closes the server out from under it — a harmless teardown artifact.
 pytestmark = pytest.mark.filterwarnings(
@@ -341,13 +350,9 @@ async def test_open_ftp_via_dunders_menu_navigates_panel(ftp_server, tmp_path):
         await pilot.pause()
         panel = app._active_panel()
         # "_" menu → FTP → type the connection string → opens & lists it.
+        # Both connect and listing are async now, so wait for them to land.
         app._do_open_dunder("ftp", f"bob:secret@127.0.0.1:{port}/")
-        assert panel.cwd_loc.scheme == "ftp"
-        # FTP is a slow provider: listing is async, so wait for it to land.
-        for _ in range(30):
-            await pilot.pause()
-            if not panel._loading:
-                break
+        await _wait_open(pilot, panel)
         names = {e.name for e in panel.entries if not e.is_parent}
         assert names == {"hello.txt", "dir"}
 
@@ -374,7 +379,6 @@ async def test_open_ftp_without_password_prompts_then_connects(ftp_server, tmp_p
         # Enter the password → connects and lists the remote.
         dialog._input.value = "secret"
         dialog.action_submit()
-        for _ in range(10):
-            await pilot.pause()
+        await _wait_open(pilot, panel)
         assert panel.cwd_loc.scheme == "ftp"
         assert {e.name for e in panel.entries if not e.is_parent} == {"hello.txt", "dir"}

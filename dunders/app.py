@@ -2004,15 +2004,41 @@ class DundersApp(App):
         if password is None and callable(needs) and needs(spec):
             self._prompt_dunder_password(scheme, spec)
             return
+        base = panel.cwd_loc
+        # Slow (network) providers connect inside resolve_target — run it on a
+        # worker so opening never freezes the UI. Fast providers (zip/7z create)
+        # resolve locally and instantly, so stay synchronous.
+        if "slow" not in getattr(provider, "capabilities", frozenset()):
+            self._apply_open_result(panel, spec, self._resolve_safe(resolver, spec, base, password))
+            return
+        self.notify(f"Connecting to {scheme}…", severity="information", timeout=3)
+
+        def _work() -> None:
+            result = self._resolve_safe(resolver, spec, base, password)
+            try:
+                self.call_from_thread(self._apply_open_result, panel, spec, result)
+            except Exception:
+                pass  # app went away
+
+        self.run_worker(_work, thread=True, exclusive=False, group="dunder-connect")
+
+    @staticmethod
+    def _resolve_safe(resolver, spec, base, password):
+        """Run resolve_target, capturing (target, error) so the result can cross
+        a worker-thread boundary."""
         try:
-            target = resolver(spec.strip(), base=panel.cwd_loc, password=password)
+            return (resolver(spec.strip(), base=base, password=password), None)
         except Exception as exc:
+            return (None, exc)
+
+    def _apply_open_result(self, panel, spec, result) -> None:
+        target, error = result
+        if error is not None:
             # Operational failure (bad host, refused, auth, timeout): show the
-            # provider's specific reason rather than a generic message.
-            self.notify(str(exc) or f"Cannot open {spec!r}", severity="error")
+            # provider's specific reason.
+            self.notify(str(error) or f"Cannot open {spec!r}", severity="error")
             return
         if target is None:
-            # The provider couldn't interpret the spec at all.
             self.notify(f"Cannot open {spec!r}", severity="warning")
             return
         panel._change_cwd_loc(target)
