@@ -212,6 +212,12 @@ class FtpProvider:
         parts = tuple(p for p in path.split("/") if p)
         return VfsPath(scheme="ftp", root=root, parts=parts)
 
+    def connection_password(self, root: str) -> str | None:
+        """The password used to connect ``root`` (for 'remember password' in a
+        bookmark), or None if not connected / no password."""
+        creds = self._creds.get(root)
+        return creds[3] if creds else None
+
     # -- VfsProvider ------------------------------------------------------
 
     def scan(

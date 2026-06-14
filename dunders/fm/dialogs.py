@@ -16,11 +16,12 @@ from rich.style import Style as RichStyle
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal
+from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.strip import Strip
 from textual import events
 from textual.widget import Widget
-from textual.widgets import Input, Static
+from textual.widgets import Checkbox, DataTable, Input, Static
 
 from dunders.windowing.content import WindowContent
 
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "AddBookmarkDialog",
+    "BookmarksDialog",
     "ChangeAttributesDialog",
     "ConfirmDialog",
     "CopyMoveDialog",
@@ -41,21 +44,17 @@ __all__ = [
 
 
 class ShadowButton(Widget):
-    """Turbo Vision-style two-row button with an offset drop shadow.
+    """A single-row button — `  <label>  ` with a bright background.
 
-    Row 0 is the button face — `  <label>  ` with a bright background.
-    Row 1 is the shadow shifted one cell to the right, drawn with
-    a fill character on a darker color. The widget claims a width of
-    ``len(face) + 1`` so the shadow tail has a column to live in.
-
-    Click on the face row, or Enter/Space when focused, posts
-    :class:`ShadowButton.Pressed`.
+    Click on the face, or Enter/Space when focused, posts
+    :class:`ShadowButton.Pressed`. (The name is historical: it used to draw
+    a Turbo Vision drop shadow, since dropped for a flat look.)
     """
 
     DEFAULT_CSS = """
     ShadowButton {
         width: auto;
-        height: 2;
+        height: 1;
         margin: 0 1 0 0;
     }
     """
@@ -79,16 +78,12 @@ class ShadowButton(Widget):
         id: str | None = None,
         face_bg: str = "rgb(0,160,176)",
         face_fg: str = "rgb(255,255,255)",
-        shadow_char: str = "░",
-        shadow_color: str = "rgb(20,20,20)",
         hotkey: str | None = None,
     ) -> None:
         super().__init__(id=id)
         self.label = label
         self._face_bg = face_bg
         self._face_fg = face_fg
-        self._shadow_char = shadow_char
-        self._shadow_color = shadow_color
         # Hotkey letter (case-insensitive). If set, render_line underlines
         # the first matching character in the label so users see which
         # key activates the button. The dialog hosting the button is
@@ -109,11 +104,10 @@ class ShadowButton(Widget):
         return face_lower.find(self.hotkey)
 
     def get_content_width(self, container, viewport) -> int:
-        # +1 column so the shadow has somewhere to extend on the right.
-        return len(self._face) + 1
+        return len(self._face)
 
     def get_content_height(self, container, viewport, width) -> int:
-        return 2
+        return 1
 
     def render_line(self, y: int) -> Strip:
         width = self.size.width
@@ -142,14 +136,6 @@ class ShadowButton(Widget):
                 Segment(face[:hk], face_style),
                 Segment(face[hk], hot_style),
                 Segment(face[hk + 1:], face_style),
-                Segment(" " * tail_w),
-            ])
-        if y == 1:
-            shadow_style = RichStyle(color=self._shadow_color)
-            tail_w = max(0, width - 1 - face_w)
-            return Strip([
-                Segment(" "),
-                Segment(self._shadow_char * face_w, shadow_style),
                 Segment(" " * tail_w),
             ])
         return Strip.blank(width)
@@ -279,7 +265,7 @@ class ConfirmDialog(FocusChainMixin, Container, WindowContent):
         margin: 1 1 0 1;
     }
     ConfirmDialog #cd-buttons {
-        height: 2;
+        height: 1;
         align: center middle;
         margin-top: 1;
     }
@@ -464,7 +450,7 @@ class CopyMoveDialog(FocusChainMixin, Container, WindowContent):
         border: none;
     }
     CopyMoveDialog #cm-buttons {
-        height: 2;
+        height: 1;
         align: center middle;
         margin-top: 1;
     }
@@ -616,7 +602,7 @@ class NewFileDialog(FocusChainMixin, Container, WindowContent):
         border: none;
     }
     NewFileDialog #nf-buttons {
-        height: 2;
+        height: 1;
         align: center middle;
         margin-top: 1;
     }
@@ -1184,7 +1170,7 @@ class FindFileDialog(FocusChainMixin, Container, WindowContent):
         layout: vertical;
     }
     FindFileDialog #ff-buttons {
-        height: 2;
+        height: 1;
         align: center middle;
         margin-top: 1;
     }
@@ -1355,3 +1341,254 @@ class FindFileDialog(FocusChainMixin, Container, WindowContent):
             self.action_submit()
         elif event.button.id == "ff-cancel":
             self.action_cancel()
+
+
+class AddBookmarkDialog(FocusChainMixin, Container, WindowContent):
+    """Modal prompt for a bookmark label, styled like NewFileDialog (flat
+    single-line input + Save/Cancel ShadowButtons). For a network location it
+    also offers a 'remember password' checkbox. Posts Submitted(label, remember)."""
+
+    can_focus = False  # the inner Input takes focus
+
+    DEFAULT_CSS = """
+    AddBookmarkDialog { layout: vertical; }
+    AddBookmarkDialog #ab-prompt { margin: 0 1; }
+    AddBookmarkDialog #ab-input {
+        margin: 0 1;
+        height: 1;
+        padding: 0 1;
+        border: none;
+        background: $boost;
+    }
+    AddBookmarkDialog #ab-input:focus {
+        background: $accent;
+        color: $text;
+        border: none;
+    }
+    AddBookmarkDialog #ab-remember { margin: 1 1 0 1; }
+    AddBookmarkDialog #ab-buttons {
+        height: 1;
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    class Submitted(Message):
+        def __init__(self, dialog: "AddBookmarkDialog", label: str, remember: bool) -> None:
+            self.dialog = dialog
+            self.label = label
+            self.remember = remember
+            super().__init__()
+
+    class Cancelled(Message):
+        def __init__(self, dialog: "AddBookmarkDialog") -> None:
+            self.dialog = dialog
+            super().__init__()
+
+    def __init__(self, *, default_label: str, ask_password: bool, context: object | None = None) -> None:
+        super().__init__()
+        self.window_title = "Add bookmark"
+        self._default_label = default_label
+        self._ask_password = ask_password
+        self.context = context
+        self._label_input = Input(id="ab-input")
+        self._remember = Checkbox(
+            "Remember password (stored in a 0600 file)", value=False, id="ab-remember"
+        )
+
+    def compose(self) -> ComposeResult:
+        yield Static("Bookmark label:", id="ab-prompt")
+        yield self._label_input
+        if self._ask_password:
+            yield self._remember
+        with Horizontal(id="ab-buttons"):
+            yield ShadowButton("Save", id="ab-save", face_bg="rgb(0,160,90)", hotkey="s")
+            yield ShadowButton("Cancel", id="ab-cancel", face_bg="rgb(160,40,40)", hotkey="c")
+
+    def on_mount(self) -> None:
+        self._label_input.value = self._default_label
+        self._label_input.focus()
+
+    def _focusables(self) -> list[Widget]:
+        out: list[Widget] = [self._label_input]
+        if self._ask_password:
+            out.append(self._remember)
+        try:
+            out.append(self.query_one("#ab-save", ShadowButton))
+            out.append(self.query_one("#ab-cancel", ShadowButton))
+        except Exception:
+            pass
+        return out
+
+    def action_submit(self) -> None:
+        remember = self._ask_password and self._remember.value
+        self.post_message(AddBookmarkDialog.Submitted(self, self._label_input.value, remember))
+
+    def action_cancel(self) -> None:
+        self.post_message(AddBookmarkDialog.Cancelled(self))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.action_submit()
+
+    def on_shadow_button_pressed(self, event: "ShadowButton.Pressed") -> None:
+        event.stop()
+        if event.button.id == "ab-save":
+            self.action_submit()
+        elif event.button.id == "ab-cancel":
+            self.action_cancel()
+
+    def on_key(self, event) -> None:
+        key = event.key
+        if key == "escape":
+            event.stop()
+            self.action_cancel()
+            return
+        if not key or len(key) != 1:
+            return
+        norm = key.lower()
+        if norm == "s":
+            event.stop()
+            self.action_submit()
+        elif norm == "c":
+            event.stop()
+            self.action_cancel()
+
+
+class _BookmarkTable(DataTable):
+    """A full-row-cursor table whose first column is a click-to-delete button.
+
+    Navigation highlights the whole row (both columns). A single click routes
+    to ``click_cb(row, column)`` instead of DataTable's select-on-second-click
+    behaviour, so clicking the ✗ deletes that row and clicking the label opens
+    it.
+    """
+
+    def __init__(self, *, click_cb, **kwargs) -> None:
+        super().__init__(cursor_type="row", show_header=False, **kwargs)
+        self._click_cb = click_cb
+
+    async def _on_click(self, event: events.Click) -> None:
+        meta = event.style.meta
+        row = meta.get("row", -1)
+        column = meta.get("column", -1)
+        if row >= 0 and column >= 0:
+            event.stop()
+            self.cursor_coordinate = Coordinate(row, column)
+            self._click_cb(row, column)
+            return
+        await super()._on_click(event)
+
+
+class BookmarksDialog(Container, WindowContent):
+    """A modal table of saved bookmarks: a delete column (✗) and the Label.
+
+    Clicking the ✗ removes that row (the table refreshes in place, posting
+    Remove(index)); clicking the label — or Enter on the highlighted row —
+    opens it (Open(index)). The row cursor highlights both columns at once.
+    Buttons below add the current location or close. Esc closes; Delete removes
+    the highlighted row.
+    """
+
+    DEFAULT_CSS = """
+    BookmarksDialog { layout: vertical; width: 60; height: auto; max-height: 24; padding: 1 1; }
+    BookmarksDialog DataTable { height: auto; max-height: 16; }
+    BookmarksDialog #bm-empty { margin: 1; color: $text-muted; }
+    BookmarksDialog #bm-buttons { height: 1; align: center middle; margin-top: 1; }
+    """
+
+    class Open(Message):
+        def __init__(self, dialog: "BookmarksDialog", index: int) -> None:
+            self.dialog = dialog
+            self.index = index
+            super().__init__()
+
+    class Remove(Message):
+        def __init__(self, dialog: "BookmarksDialog", index: int) -> None:
+            self.dialog = dialog
+            self.index = index
+            super().__init__()
+
+    class AddCurrent(Message):
+        def __init__(self, dialog: "BookmarksDialog") -> None:
+            self.dialog = dialog
+            super().__init__()
+
+    class Cancelled(Message):
+        def __init__(self, dialog: "BookmarksDialog") -> None:
+            self.dialog = dialog
+            super().__init__()
+
+    BINDINGS = [
+        Binding("escape", "cancel", show=False),
+        Binding("delete", "remove", show=False),
+    ]
+
+    _DEL_COL = 0  # the ✗ column index
+
+    def __init__(self, bookmarks: list[dict]) -> None:
+        super().__init__()
+        self.window_title = "Bookmarks"
+        self._bookmarks = bookmarks
+        self._table = _BookmarkTable(click_cb=self._on_cell_click, id="bm-table")
+
+    def compose(self) -> ComposeResult:
+        yield self._table
+        yield Static("No bookmarks yet — press Ctrl+D in a panel to add one.", id="bm-empty")
+        with Horizontal(id="bm-buttons"):
+            yield ShadowButton("Add current", id="bm-add", face_bg="rgb(0,160,90)", hotkey="a")
+            yield ShadowButton("Close", id="bm-close", face_bg="rgb(160,40,40)", hotkey="c")
+
+    def on_mount(self) -> None:
+        self._table.add_column("", width=3)
+        self._table.add_column("Label")
+        self.refresh_rows(self._bookmarks)
+        self._table.focus()
+
+    def refresh_rows(self, bookmarks: list[dict]) -> None:
+        """Rebuild the table from ``bookmarks`` (called after a delete so the
+        dialog stays open and stays consistent)."""
+        self._bookmarks = bookmarks
+        self._table.clear()
+        for b in bookmarks:
+            self._table.add_row("✗", b["label"])
+        try:
+            self.query_one("#bm-empty", Static).display = not bookmarks
+            self._table.display = bool(bookmarks)
+        except Exception:
+            pass
+
+    def _on_cell_click(self, row: int, column: int) -> None:
+        if not 0 <= row < len(self._bookmarks):
+            return
+        if column == self._DEL_COL:
+            self._remove_index(row)
+        else:
+            self._open_index(row)
+
+    def on_data_table_row_selected(self, event: "DataTable.RowSelected") -> None:
+        # Keyboard Enter on the highlighted row opens it.
+        row = event.cursor_row
+        if 0 <= row < len(self._bookmarks):
+            self._open_index(row)
+
+    def action_cancel(self) -> None:
+        self.post_message(BookmarksDialog.Cancelled(self))
+
+    def action_remove(self) -> None:
+        coord = self._table.cursor_coordinate
+        if coord is not None and 0 <= coord.row < len(self._bookmarks):
+            self._remove_index(coord.row)
+
+    def on_shadow_button_pressed(self, event: "ShadowButton.Pressed") -> None:
+        event.stop()
+        if event.button.id == "bm-add":
+            self.post_message(BookmarksDialog.AddCurrent(self))
+        elif event.button.id == "bm-close":
+            self.post_message(BookmarksDialog.Cancelled(self))
+
+    def _open_index(self, index: int) -> None:
+        self.post_message(BookmarksDialog.Open(self, index))
+
+    def _remove_index(self, index: int) -> None:
+        self.post_message(BookmarksDialog.Remove(self, index))

@@ -34,18 +34,6 @@ async def test_we_ctrl_e_focuses_command_line():
         assert app.focused is cmd_input
 
 
-@pytest.mark.asyncio
-async def test_we_cascade_hotkey_dispatches():
-    app = DundersApp(launch_mode="we", initial_paths=[_make_file()])
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        calls: list[str] = []
-        orig = app.manager.cascade
-        app.manager.cascade = lambda: (calls.append("cascade"), orig())[1]
-        await pilot.press("ctrl+b")
-        await pilot.pause()
-        assert calls == ["cascade"]
-
 
 @pytest.mark.asyncio
 async def test_we_tile_vertical_hotkey_dispatches():

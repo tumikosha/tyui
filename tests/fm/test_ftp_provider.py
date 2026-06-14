@@ -382,3 +382,13 @@ async def test_open_ftp_without_password_prompts_then_connects(ftp_server, tmp_p
         await _wait_open(pilot, panel)
         assert panel.cwd_loc.scheme == "ftp"
         assert {e.name for e in panel.entries if not e.is_parent} == {"hello.txt", "dir"}
+
+
+@_needs_server
+def test_connection_password_returns_login_secret(ftp_server):
+    _host, port, _root = ftp_server
+    p = FtpProvider()
+    root = f"bob@127.0.0.1:{port}"
+    p.resolve_target(f"bob:secret@127.0.0.1:{port}/", base=VfsPath.local("/"))
+    assert p.connection_password(root) == "secret"
+    assert p.connection_password("unknown@nope:21") is None

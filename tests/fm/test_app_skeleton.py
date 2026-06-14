@@ -948,6 +948,64 @@ async def test_editor_z_order_preserved_after_mouse_menu_open(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_f9_opens_first_dropdown_immediately(tmp_path):
+    """F9 should reveal the first menu's dropdown right away, not merely
+    highlight the leftmost label — as if the user pressed Enter on it."""
+    app = DundersApp(launch_mode="fm", initial_path=str(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause(); await pilot.pause()
+        await pilot.press("f9")
+        await pilot.pause(); await pilot.pause()
+        assert app.menu_bar.active_index == 0
+        assert app._active_dropdown is not None
+
+
+@pytest.mark.asyncio
+async def test_f10_shows_exit_confirmation(tmp_path):
+    """F10 must not quit straight away — it opens a Yes/No Exit confirmation."""
+    from dunders.app import QuitRequest
+    from dunders.fm.dialogs import ConfirmDialog
+
+    app = DundersApp(launch_mode="fm", initial_path=str(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause(); await pilot.pause()
+        await pilot.press("f10")
+        await pilot.pause(); await pilot.pause()
+        dlg = app.query_one(ConfirmDialog)
+        assert isinstance(dlg.context, QuitRequest)
+        assert app.is_running  # not exited
+
+
+@pytest.mark.asyncio
+async def test_exit_confirmation_no_keeps_running(tmp_path):
+    from dunders.fm.dialogs import ConfirmDialog
+
+    app = DundersApp(launch_mode="fm", initial_path=str(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause(); await pilot.pause()
+        await pilot.press("f10")
+        await pilot.pause()
+        await pilot.press("n")  # No
+        await pilot.pause(); await pilot.pause()
+        assert not app.query(ConfirmDialog)  # dialog dismissed
+        assert app.is_running
+
+
+@pytest.mark.asyncio
+async def test_exit_confirmation_yes_exits(tmp_path):
+    app = DundersApp(launch_mode="fm", initial_path=str(tmp_path))
+    called = {}
+    async with app.run_test() as pilot:
+        await pilot.pause(); await pilot.pause()
+        app.exit = lambda *a, **k: called.setdefault("exit", True)
+        await pilot.press("f10")
+        await pilot.pause()
+        await pilot.press("y")  # Yes
+        await pilot.pause(); await pilot.pause()
+        assert called.get("exit")
+
+
+@pytest.mark.asyncio
 async def test_panel_items_filtered_out_when_editor_focused(tmp_path):
     """File menu lists panel.view / panel.edit / save. When the editor is
     focused those panel.* commands have nowhere to resolve, so a Dropdown

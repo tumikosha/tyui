@@ -44,7 +44,10 @@ from dunders.fm.console.registry import ConsoleRegistry
 from dunders.fm.console.handover import TerminalHandover, make_handover
 from dunders.fm.console.runner import CommandRunner
 from dunders.fm.console.window import ConsoleContent
+from dunders.config.bookmarks import add_bookmark, list_bookmarks, remove_bookmark
 from dunders.fm.dialogs import (
+    AddBookmarkDialog,
+    BookmarksDialog,
     ChangeAttributesDialog,
     ConfirmDialog,
     CopyMoveDialog,
@@ -244,8 +247,18 @@ class CancelSearchRequest:
 
 
 @dataclass(frozen=True)
+class QuitRequest:
+    """Marker context: the Yes/No confirmation guarding F10 quit."""
+
+
+@dataclass(frozen=True)
 class UserMenuPromptRequest:
     label: str
+
+
+@dataclass(frozen=True)
+class AddBookmarkRequest:
+    loc: VfsPath  # the cwd_loc being bookmarked
 
 
 LaunchMode = Literal["fm", "editor", "cli", "we", "we-mc"]
@@ -558,6 +571,8 @@ class DundersApp(App):
             self._run_delete(ctx)
         elif isinstance(ctx, CancelSearchRequest):
             ctx.content.cancel_event.set()
+        elif isinstance(ctx, QuitRequest):
+            self.exit()
 
     def on_copy_move_dialog_submitted(
         self, event: CopyMoveDialog.Submitted
@@ -866,11 +881,11 @@ class DundersApp(App):
         # would call the action twice (and destroy ``_pre_menu_focus``).
         cmds = [
             WindowCommand(id="app.menu", label="Menu", handler=self.action_menu),
-            WindowCommand(id="app.quit", label="Quit", handler=self.exit),
+            WindowCommand(id="app.quit", label="Quit", handler=self.action_quit),
             WindowCommand(id="app.open_file", label="Open File...", handler=self.action_open_file),
             WindowCommand(id="view.tile_h", label="Tile horizontal", handler=lambda: m.tile_horizontal()),
             WindowCommand(id="view.tile_v", label="Tile vertical", handler=lambda: m.tile_vertical(), hotkey="ctrl+u"),
-            WindowCommand(id="view.cascade", label="Cascade", handler=lambda: m.cascade(), hotkey="ctrl+b"),
+            WindowCommand(id="view.cascade", label="Cascade", handler=lambda: m.cascade()),
             # Terminal-independent alias for the alt+c command-line focus
             # binding: macOS Terminal/iTerm send Option+C as the literal
             # character "ç" (unless "Use Option as Meta" is on), so alt+c
@@ -887,6 +902,8 @@ class DundersApp(App):
             WindowCommand(id="panel.left.toggle", label="Toggle Left Panel", handler=lambda: self._toggle_panel("panel-left"), hotkey="ctrl+1"),
             WindowCommand(id="panel.right.toggle", label="Toggle Right Panel", handler=lambda: self._toggle_panel("panel-right"), hotkey="ctrl+2"),
             WindowCommand(id="palette.open", label="Command Palette", handler=self.action_open_palette, hotkey="ctrl+k"),
+            WindowCommand(id="bookmark.add", label="Add bookmark…", handler=self.action_add_bookmark, hotkey="ctrl+d"),
+            WindowCommand(id="bookmark.open", label="Bookmarks…", handler=self.action_open_bookmarks, hotkey="ctrl+b"),
             WindowCommand(id="panels.fullscreen", label="Panels Fullscreen", handler=self.action_panels_fullscreen, hotkey="ctrl+p"),
             WindowCommand(
                 id="console.toggle",
@@ -966,6 +983,7 @@ class DundersApp(App):
                 label=label,
                 handler=(lambda s=scheme: self._open_dunder(s)),
             ))
+        cmds.extend(self._bookmark_commands())
         self.command_registry.register_many(cmds)
 
     def _openable_dunders(self) -> list[tuple[str, str]]:
@@ -1172,8 +1190,16 @@ class DundersApp(App):
         self._all_menus = [
             # The brand menu: every openable dunder (provider) — fill in the blank.
             Menu("_", [
-                MenuItem(label=label, command_id=f"dunder.open.{scheme}")
-                for scheme, label in self._openable_dunders()
+                *[
+                    MenuItem(label=label, command_id=f"dunder.open.{scheme}")
+                    for scheme, label in self._openable_dunders()
+                ],
+                MenuSeparator(),
+                MenuItem(label="Add current location…", command_id="bookmark.add.menu"),
+                *[
+                    MenuItem(label=b["label"], command_id=f"bookmark.open.{i}")
+                    for i, b in enumerate(list_bookmarks())
+                ],
             ]),
             Menu("Left", [
                 MenuItem(label="Toggle visibility", command_id="panel.left.toggle"),
@@ -1309,7 +1335,7 @@ class DundersApp(App):
             "7":  self.action_mkdir,
             "8":  self.action_delete,
             "9":  self.action_menu,
-            "10": self.exit,
+            "10": self.action_quit,
         }
         return [
             StatusItem(key=label.key, label=label.label, handler=handlers.get(label.key))
@@ -1336,7 +1362,7 @@ class DundersApp(App):
             "7":  _dispatch("fold_toggle"),
             "8":  _dispatch("record_macro"),
             "9":  self.action_menu,
-            "10": self.exit,
+            "10": self.action_quit,
         }
         return [
             StatusItem(key=label.key, label=label.label, handler=handlers.get(label.key))
@@ -2055,6 +2081,36 @@ class DundersApp(App):
         show_modal(self.desktop, dialog, title="Password", size=(50, 5))
         self.call_after_refresh(dialog.focus_input)
 
+    def _scheme_is_slow(self, scheme: str) -> bool:
+        try:
+            provider = self._vfs_registry.for_scheme(scheme)
+        except KeyError:
+            return False
+        return "slow" in getattr(provider, "capabilities", frozenset())
+
+    def action_add_bookmark(self) -> None:
+        if self._has_active_modal():
+            return
+        panel = self._active_panel()
+        if panel is None or self.desktop is None:
+            return
+        loc = panel.cwd_loc
+        self._remember_active_panel_id()
+        dialog = AddBookmarkDialog(
+            default_label=loc.name,
+            ask_password=self._scheme_is_slow(loc.scheme),
+            context=AddBookmarkRequest(loc=loc),
+        )
+        show_modal(self.desktop, dialog, title="Add bookmark", size=(62, 9))
+        self.call_after_refresh(dialog._label_input.focus)
+
+    def _refresh_bookmarks_menu(self) -> None:
+        # Re-register bookmark commands (labels/ids change as bookmarks change),
+        # then rebuild the menu so the "_" section reflects the new list.
+        self.command_registry.register_many(self._bookmark_commands())
+        if self._all_menus:
+            self._build_menus()
+
     def action_new(self) -> None:
         if self._has_active_modal():
             return
@@ -2069,6 +2125,85 @@ class DundersApp(App):
         )
         show_modal(self.desktop, dialog, title="New", size=(60, 7))
         self.call_after_refresh(dialog.focus_input)
+
+    def on_add_bookmark_dialog_submitted(self, event: AddBookmarkDialog.Submitted) -> None:
+        ctx = event.dialog.context
+        self._close_modal(event.dialog)
+        if not isinstance(ctx, AddBookmarkRequest):
+            return
+        label = (event.label or "").strip()
+        if not label:
+            return
+        password = None
+        if event.remember:
+            provider = self._vfs_registry.for_scheme(ctx.loc.scheme)
+            getpw = getattr(provider, "connection_password", None)
+            if callable(getpw):
+                password = getpw(ctx.loc.root)
+        add_bookmark(label, ctx.loc.as_uri(), password)
+        self._refresh_bookmarks_menu()
+
+    def on_add_bookmark_dialog_cancelled(self, event: AddBookmarkDialog.Cancelled) -> None:
+        self._close_modal(event.dialog)
+
+    def action_open_bookmarks(self) -> None:
+        if self._has_active_modal() or self.desktop is None:
+            return
+        self._remember_active_panel_id()
+        dialog = BookmarksDialog(list_bookmarks())
+        show_modal(self.desktop, dialog, title="Bookmarks", size=(86, 24))
+        self.call_after_refresh(dialog._table.focus)
+
+    def on_bookmarks_dialog_open(self, event: BookmarksDialog.Open) -> None:
+        self._close_modal(event.dialog)
+        items = list_bookmarks()
+        if 0 <= event.index < len(items):
+            self._open_bookmark(items[event.index])
+
+    def on_bookmarks_dialog_remove(self, event: BookmarksDialog.Remove) -> None:
+        remove_bookmark(event.index)
+        self._refresh_bookmarks_menu()
+        # Keep the picker open and refresh its table in place so the user can
+        # delete several bookmarks in a row.
+        event.dialog.refresh_rows(list_bookmarks())
+
+    def on_bookmarks_dialog_add_current(self, event: BookmarksDialog.AddCurrent) -> None:
+        self._close_modal(event.dialog)
+        self.action_add_bookmark()
+
+    def on_bookmarks_dialog_cancelled(self, event: BookmarksDialog.Cancelled) -> None:
+        self._close_modal(event.dialog)
+
+    def _open_bookmark(self, bm: dict) -> None:
+        panel = self._active_panel()
+        if panel is None:
+            return
+        try:
+            loc = VfsPath.parse(bm["uri"])
+        except Exception:
+            self.notify(f"Bad bookmark: {bm.get('label')!r}", severity="warning")
+            return
+        if self._scheme_is_slow(loc.scheme):
+            spec = loc.root + ("/" + "/".join(loc.parts) if loc.parts else "/")
+            self._do_open_dunder(loc.scheme, spec, password=bm.get("password"))
+        else:
+            panel._change_cwd_loc(loc)
+
+    def _bookmark_commands(self) -> "list[WindowCommand]":
+        out = [WindowCommand(id="bookmark.add.menu", label="Add current location…",
+                             handler=self.action_add_bookmark)]
+        for i, b in enumerate(list_bookmarks()):
+            out.append(WindowCommand(
+                id=f"bookmark.open.{i}",
+                label=b["label"],
+                handler=(lambda idx=i: self._open_bookmark_by_index(idx)),
+            ))
+        return out
+
+    def _open_bookmark_by_index(self, index: int) -> None:
+        items = list_bookmarks()
+        if 0 <= index < len(items):
+            self._open_bookmark(items[index])
 
     # --- Find file ---------------------------------------------------------
 
@@ -3130,6 +3265,23 @@ class DundersApp(App):
                 self._pre_menu_window = self.desktop.focused_window
             self.menu_bar.activate(0)
             self.set_focus(self.menu_bar)
+            # Drop the first menu open straight away, as if the user pressed
+            # Enter on it — F9 should reveal the menu, not just highlight it.
+            self.menu_bar.open_active()
+
+    def action_quit(self) -> None:  # noqa: D401 - overrides Textual's built-in
+        # F10 / menu Quit / command-line "10" all land here: confirm first so
+        # a stray keypress can't drop the user out of the app.
+        if self.desktop is None:
+            self.exit()
+            return
+        if self._has_active_modal():
+            return
+        confirm = ConfirmDialog(
+            prompt="Quit dunders?",
+            context=QuitRequest(),
+        )
+        show_modal(self.desktop, confirm, title="Exit", size=(40, 6))
 
     # --- focus & menu routing ---------------------------------------------
 

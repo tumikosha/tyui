@@ -196,6 +196,11 @@ class SftpProvider:
         parts = tuple(p for p in path.split("/") if p)
         return VfsPath(scheme="sftp", root=root, parts=parts)
 
+    def connection_password(self, root: str) -> str | None:
+        """The password used to connect ``root``, or None."""
+        creds = self._creds.get(root)
+        return creds[3] if creds else None
+
     # -- VfsProvider ------------------------------------------------------
 
     def scan(
